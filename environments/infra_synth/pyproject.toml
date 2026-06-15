@@ -1,0 +1,23 @@
+[project]
+name = "infra-synth"
+version = "0.1.0"
+description = "RLVR environment: generate infrastructure-as-code (Dockerfile first) graded by build + smoke test in a sandboxed verifier."
+tags = ["single-turn", "code", "infrastructure", "dockerfile", "rlvr", "verifiable-rewards"]
+license = "Apache-2.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "verifiers>=0.1.14",
+    "datasets",
+    "crucible-verifier",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["infra_synth.py", "pyproject.toml"]
+
+[tool.verifiers.eval]
+num_examples = 10
+rollouts_per_example = 4
