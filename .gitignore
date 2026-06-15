@@ -74,3 +74,7 @@ Thumbs.db
 # ---- logs ----
 *.log
 logs/
+
+# Claude Code — local/personal only (settings.json, agents/, commands/, hooks/, CLAUDE.md ARE committed)
+.claude/settings.local.json
+**/CLAUDE.local.md
