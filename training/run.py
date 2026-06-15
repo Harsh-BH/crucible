@@ -256,7 +256,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "verifier_backend": args.verifier_backend,
         "sentinel_base_url": args.sentinel_base_url,
         "build_weight": args.build_weight, "smoke_weight": args.smoke_weight,
-        "hack_penalty": args.hack_penalty, "use_format_reward": args.use_format_reward,
+        "hack_penalty": args.hack_penalty, "use_format_reward": args.format_reward,
         "seed": args.seed, "wandb_project": args.wandb_project,
         "wandb_name": args.wandb_name, "output_dir": args.output_dir,
         "logging_steps": args.logging_steps, "save_steps": args.save_steps,
