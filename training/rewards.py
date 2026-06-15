@@ -49,16 +49,13 @@ _BOXED_RE = re.compile(r"\\boxed\{[^{}]*\}")
 def _import_infra_env() -> tuple[Any, Any]:
     """Lazily import ``(tasks_module, extract_dockerfile)`` from the env package.
 
-    Robust to the env's flat editable layout: try the ``infra_synth.tasks`` /
-    ``infra_synth.parser`` package form first, then fall back to the top-level
-    ``tasks`` / ``parser`` modules (see :func:`training.data._import_infra_tasks`).
+    The ``infra_synth`` env is a proper nested package
+    (``pip install -e ./environments/infra_synth`` or ``prime env install``), so
+    its modules import cleanly as ``infra_synth.tasks`` / ``infra_synth.parser``.
     """
-    try:
-        from infra_synth import tasks as infra_tasks  # type: ignore[no-redef]
-        from infra_synth.parser import extract_dockerfile  # type: ignore[no-redef]
-    except ImportError:
-        import tasks as infra_tasks  # type: ignore[no-redef]
-        from parser import extract_dockerfile  # type: ignore[no-redef]
+    from infra_synth import tasks as infra_tasks
+    from infra_synth.parser import extract_dockerfile
+
     return infra_tasks, extract_dockerfile
 
 

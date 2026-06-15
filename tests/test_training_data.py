@@ -7,9 +7,6 @@ need ``datasets`` (and, for infra, the env package), so they are guarded with
 """
 from __future__ import annotations
 
-import os
-import sys
-
 import pytest
 
 from training.data import (
@@ -19,13 +16,9 @@ from training.data import (
     extract_boxed_or_final_number,
 )
 
-# The infra_synth env ships a flat layout: ensure ``environments/`` is importable
-# (mirrors how training.data._import_infra_tasks finds the installed package).
-_ENVS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "environments"
-)
-if _ENVS_DIR not in sys.path:
-    sys.path.insert(0, _ENVS_DIR)
+# ``build_infra_synth`` imports ``infra_synth.tasks`` from the installed env
+# package (``pip install -e ./environments/infra_synth``); the builder tests are
+# guarded with ``pytest.importorskip`` and skip cleanly when it is absent.
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +125,7 @@ def test_build_gsm8k_shape() -> None:
 
 def test_build_infra_synth_shape() -> None:
     pytest.importorskip("datasets")
-    # The flat env package exposes `tasks` / `infra_synth` on environments/ path.
+    # The installed env package exposes the ``infra_synth.tasks`` builder.
     pytest.importorskip("infra_synth")
     ds = build_infra_synth(split="train", n=5, seed=0)
     assert len(ds) == 5

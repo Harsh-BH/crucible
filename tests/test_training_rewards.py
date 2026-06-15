@@ -8,9 +8,6 @@ Covers:
 """
 from __future__ import annotations
 
-import os
-import sys
-
 import pytest
 
 from training.rewards import (
@@ -18,16 +15,11 @@ from training.rewards import (
     gsm8k_reward,
     make_infra_synth_reward,
 )
+from verifier.types import VerifyResult, VerifySpec
 
-# The infra_synth env (flat layout) lives under environments/; make it importable
-# so ``make_infra_synth_reward``'s closure can import tasks/parser.
-_ENVS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "environments"
-)
-if _ENVS_DIR not in sys.path:
-    sys.path.insert(0, _ENVS_DIR)
-
-from verifier.types import VerifyResult, VerifySpec  # noqa: E402
+# ``make_infra_synth_reward``'s closure imports ``infra_synth.tasks`` /
+# ``infra_synth.parser`` from the installed env package (``pip install -e
+# ./environments/infra_synth``); these tests skip cleanly if it is absent.
 
 
 # ---------------------------------------------------------------------------

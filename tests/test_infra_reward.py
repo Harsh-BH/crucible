@@ -1,29 +1,21 @@
-"""Tests for the vf-free reward core in ``infra_synth.infra_synth`` (no backend).
+"""Tests for the vf-free reward core in ``infra_synth.environment`` (no backend).
 
 We do NOT depend on the parallel ``verifier`` reward implementation here: we
 inject a STUB ``Verifier`` returning a canned ``VerifyResult`` and assert the
 shaping math via the factored-out ``_score`` helper (the pure-Python mirror of
 ``verifier.shape_reward``).
+
+Importing ``infra_synth.environment`` is ``verifiers``-free (``verifiers`` is
+imported lazily inside ``load_environment``), so this stays vf-free.
 """
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 
 import pytest
 
-# Import the env package as `infra_synth` (its __init__ imports `verifiers`
-# lazily, so this stays vf-free).
-_ENVS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "environments",
-)
-if _ENVS_DIR not in sys.path:
-    sys.path.insert(0, _ENVS_DIR)
-
-from infra_synth.infra_synth import _metrics, _score  # noqa: E402
-from verifier.types import HackFlags, Verifier, VerifySpec, VerifyResult  # noqa: E402
+from infra_synth.environment import _metrics, _score
+from verifier.types import HackFlags, Verifier, VerifySpec, VerifyResult
 
 
 class StubVerifier:

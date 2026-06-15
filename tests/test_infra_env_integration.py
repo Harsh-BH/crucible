@@ -7,22 +7,13 @@ When present, this builds the real ``vf.SingleTurnEnv`` with the zero-dependency
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 
 import pytest
 
 vf = pytest.importorskip("verifiers", reason="verifiers not installed on this box")
 pytest.importorskip("datasets", reason="datasets not installed on this box")
 
-_ENVS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "environments",
-)
-if _ENVS_DIR not in sys.path:
-    sys.path.insert(0, _ENVS_DIR)
-
-from infra_synth.infra_synth import load_environment  # noqa: E402
+from infra_synth import load_environment  # noqa: E402
 
 
 def _get_dataset(env):
