@@ -1,0 +1,62 @@
+# prime-rl: M1 reproduction — the "known GRPO result" on GSM8K.
+#
+# Qwen3-1.7B + LoRA, single-GPU-friendly. Reward is expected to rise stably;
+# this is the milestone we reproduce before swapping in our own env (M2).
+#
+# Single-GPU launch line:
+# uv run rl @ training/configs/m1_gsm8k.toml --trainer-gpu-ids 0 --inference-gpu-ids 0 --inference.gpu-memory-utilization 0.5 --inference.model.max-model-len 2048
+max_steps = 100
+seq_len = 2048
+seed = 0
+
+[model]
+name = "Qwen/Qwen3-1.7B"
+
+[trainer.model.lora]
+rank = 8
+alpha = 16
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.optim]
+lr = 1e-6
+
+[trainer.loss]
+type = "default"
+dppo_mask_low = 0.2
+dppo_mask_high = 0.2
+adv_tau = 1.0
+kl_tau = 1e-3
+
+[orchestrator]
+batch_size = 128
+group_size = 8
+
+[orchestrator.advantage]
+type = "default"
+
+[orchestrator.buffer]
+easy_threshold = 0.95
+hard_threshold = 0.05
+online_difficulty_filtering = true
+
+[orchestrator.train.sampling]
+max_completion_tokens = 1024
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "math-env"
+name = "gsm8k"
+args = { dataset_name = "openai/gsm8k", dataset_subset = "main", math_verify_max_workers = 32, math_verify_timeout = 60 }
+
+[wandb]
+project = "crucible-m1"
+name = "gsm8k-qwen3-1.7b-s0"
+
+[ckpt]
+
+[inference]
+
+[orchestrator.renderer]
+name = "auto"
+preserve_all_thinking = true

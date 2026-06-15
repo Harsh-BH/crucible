@@ -1,0 +1,37 @@
+# TRL GRPO config — M2 (infra_synth, reward routed through Sentinel).
+#
+# Consumed by training/run.py (--config). Same single-GPU GRPO recipe as M1,
+# but the env is infra_synth and the reward backend is `sentinel`. Requires the
+# infra_synth env package installed AND a running Sentinel on :8080
+# (`make up` in the Sentinel repo). The `seeds` list is read by seeds.py.
+#
+#   python training/run.py --config training/configs/m2_sentinel.yaml --seed 0
+env: infra_synth
+verifier_backend: sentinel
+sentinel_base_url: http://localhost:8080
+
+model: Qwen/Qwen3-1.7B
+
+# LoRA
+lora: true
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+
+# GRPO core
+num_generations: 8
+beta: 0.0
+temperature: 1.0
+max_completion_length: 1024
+
+# optim / schedule
+lr: 1.0e-6
+max_steps: 100
+
+# infra_synth reward shaping (verifier.shape_reward weights)
+build_weight: 0.3
+smoke_weight: 0.7
+
+# bookkeeping
+wandb_project: crucible-m2
+seeds: [0, 1, 2]

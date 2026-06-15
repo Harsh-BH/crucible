@@ -1,0 +1,39 @@
+# TRL GRPO config — M1 reproduction (GSM8K on Qwen3-1.7B + LoRA).
+#
+# Consumed by training/run.py (--config). Keys are the RunConfig field names
+# (== the CLI flag names with dashes -> underscores); any CLI flag overrides the
+# value here. The `seeds` list below is read by training/seeds.py (run.py runs a
+# single seed and ignores it).
+#
+#   python training/run.py --config training/configs/m1_repro.yaml --seed 0
+#
+# Multi-seed M1 definition-of-done (reward rises across >=3 seeds), via seeds.py:
+#   python -c "from training.seeds import launch_seeds; \
+#     launch_seeds(env='gsm8k', seeds=(0,1,2), output_dir='outputs/m1', \
+#       extra_args=['--config','training/configs/m1_repro.yaml'])"
+env: gsm8k
+model: Qwen/Qwen3-1.7B
+
+# LoRA
+lora: true
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+
+# GRPO core
+num_generations: 8
+beta: 0.0
+epsilon: 0.2
+loss_type: grpo
+importance_sampling_level: token
+scale_rewards: false
+temperature: 1.0
+max_completion_length: 1024
+
+# optim / schedule
+lr: 1.0e-6
+max_steps: 100
+
+# bookkeeping
+wandb_project: crucible-m1
+seeds: [0, 1, 2]

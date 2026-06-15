@@ -1,0 +1,39 @@
+# prime-rl: cheap end-to-end loop smoke test (reverse-text toy task).
+#
+# This is the smallest prime-rl run that exercises the whole RL loop
+# (orchestrator + trainer + inference) on a tiny SFT'd model. Use it to confirm
+# the stack is wired before spending GPU on the real M1 GSM8K run below.
+#
+# Launch (single GPU):
+#   uv run rl @ training/configs/m1_reverse_text.toml --trainer-gpu-ids 0 --inference-gpu-ids 0
+max_steps = 20
+seq_len = 2048
+seed = 0
+
+[model]
+name = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
+
+[wandb]
+project = "crucible-m1"
+name = "reverse-text-s0"
+
+[orchestrator]
+batch_size = 128
+group_size = 16
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "reverse-text"
+
+[trainer.optim]
+lr = 3e-6
+
+[ckpt]
+
+[inference]
+
+[orchestrator.renderer]
+name = "default"

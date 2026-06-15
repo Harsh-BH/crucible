@@ -1,0 +1,68 @@
+# prime-rl: M2 — train our own `infra_synth` env with reward via Sentinel.
+#
+# Identical model / LoRA / optimizer / loss to the M1 GSM8K config; only the
+# environment changes. The `infra-synth` env routes each rollout's Dockerfile
+# through the hardened Sentinel sandbox (build + smoke probe) for reward.
+#
+# Prerequisites (both required):
+#   1. The env must be installed into the prime-rl workspace, e.g.
+#        prime env install infra-synth          # or add it to the workspace
+#   2. A running Sentinel sandbox on :8080 — from the Sentinel repo:
+#        make up                                 # serves http://localhost:8080
+#
+# Single-GPU launch line:
+# uv run rl @ training/configs/m2_infra_sentinel.toml --trainer-gpu-ids 0 --inference-gpu-ids 0 --inference.gpu-memory-utilization 0.5 --inference.model.max-model-len 2048
+max_steps = 100
+seq_len = 2048
+seed = 0
+
+[model]
+name = "Qwen/Qwen3-1.7B"
+
+[trainer.model.lora]
+rank = 8
+alpha = 16
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.optim]
+lr = 1e-6
+
+[trainer.loss]
+type = "default"
+dppo_mask_low = 0.2
+dppo_mask_high = 0.2
+adv_tau = 1.0
+kl_tau = 1e-3
+
+[orchestrator]
+batch_size = 128
+group_size = 8
+
+[orchestrator.advantage]
+type = "default"
+
+[orchestrator.buffer]
+easy_threshold = 0.95
+hard_threshold = 0.05
+online_difficulty_filtering = true
+
+[orchestrator.train.sampling]
+max_completion_tokens = 1024
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "infra-synth"
+args = { verifier_backend = "sentinel", sentinel_base_url = "http://localhost:8080" }
+
+[wandb]
+project = "crucible-m1"
+name = "infra-synth-sentinel-s0"
+
+[ckpt]
+
+[inference]
+
+[orchestrator.renderer]
+name = "auto"
+preserve_all_thinking = true
