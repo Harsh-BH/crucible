@@ -64,7 +64,7 @@ select = ["E", "F", "I", "UP", "B"]
 "verifier/types.py" = ["UP042", "E501"]
 # `vf` (verifiers) is a TYPE_CHECKING-only import, so the return annotation MUST
 # stay quoted; UP037 would (incorrectly) strip the quotes and break runtime.
-"environments/infra_synth/infra_synth.py" = ["UP037"]
+"environments/infra_synth/infra_synth/environment.py" = ["UP037"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

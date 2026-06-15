@@ -25,7 +25,8 @@ import math
 import os
 import subprocess
 import sys
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 __all__ = [
     "aggregate_seed_metrics",

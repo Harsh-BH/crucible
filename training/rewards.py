@@ -27,12 +27,13 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from .data import extract_boxed_or_final_number
 
 if TYPE_CHECKING:  # type-only; never imported at runtime
-    from verifier.types import VerifySpec, Verifier, VerifyResult
+    from verifier.types import Verifier, VerifyResult, VerifySpec
 
 __all__ = [
     "gsm8k_reward",
@@ -182,7 +183,7 @@ def make_infra_synth_reward(
     hack_penalty: float = 0.0,
     binary: bool = False,
     sentinel_base_url: str | None = None,
-    verifier: "Verifier | None" = None,
+    verifier: Verifier | None = None,
     time_limit_ms: int | None = None,
     mem_mb: int | None = None,
 ) -> Callable[..., list[float]]:
@@ -212,7 +213,7 @@ def make_infra_synth_reward(
     factory's *module* stays torch/verifier-free at import time.
     """
 
-    def _resolve_verifier() -> "Verifier":
+    def _resolve_verifier() -> Verifier:
         if verifier is not None:
             return verifier
         from verifier import get_verifier  # lazy
@@ -242,14 +243,14 @@ def make_infra_synth_reward(
         # Parse artifacts + build specs up front (pure / stdlib).
         artifacts: list[str] = [completion_to_text(completions[i]) for i in range(n)]
         dockerfiles: list[str] = [extract_dockerfile(a) for a in artifacts]
-        specs: list["VerifySpec"] = []
+        specs: list[VerifySpec] = []
         for i in range(n):
             row_info = infos[i] if i < len(infos) else {}
             specs.append(infra_tasks.build_verify_spec(row_info))
 
         backend = _resolve_verifier()
 
-        async def _run_all() -> list["VerifyResult"]:
+        async def _run_all() -> list[VerifyResult]:
             # Verify the whole batch concurrently on one event loop.
             return await asyncio.gather(
                 *(backend.verify(dockerfiles[i], specs[i]) for i in range(n))

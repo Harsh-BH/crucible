@@ -13,9 +13,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from infra_synth.environment import _metrics, _score
-from verifier.types import HackFlags, Verifier, VerifySpec, VerifyResult
+
+from verifier.types import HackFlags, Verifier, VerifyResult, VerifySpec
 
 
 class StubVerifier:

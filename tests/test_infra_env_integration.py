@@ -46,7 +46,6 @@ def test_eval_dataset_disjoint_from_train() -> None:
     eval_ds = env.get_eval_dataset() if hasattr(env, "get_eval_dataset") else None
     if eval_ds is None:
         pytest.skip("eval dataset not exposed by this verifiers version")
-    train_ids = {r["info"]["spec_id"].split("-", 1)[1] for r in train}
     # spec_ids embed the split; just confirm the eval split is the 'test' pool.
     assert all(r["info"]["spec_id"].startswith("test-") for r in eval_ds)
     assert all(not sid.startswith("test-") for sid in
