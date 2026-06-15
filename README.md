@@ -198,6 +198,10 @@ Downstream, the **C3** study (`analysis/reward_hacking.py`) compares the weak
 `local-py` verifier against the hardened `sentinel` verifier on reward-hacking
 incidence, using a 6-category taxonomy and an ImpossibleBench-style cheating rate.
 
+**→ The full forward plan** — prioritized next steps, the M3–M6 detail, the C1
+Sentinel-extension plan, and an execution playbook — lives in
+[`docs/ROADMAP.md`](./docs/ROADMAP.md).
+
 ---
 
 ## Known limitations & next steps
