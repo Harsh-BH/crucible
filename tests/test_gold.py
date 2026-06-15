@@ -7,7 +7,6 @@ The gold reference Dockerfile must (a) have the right structural properties and
 from __future__ import annotations
 
 import pytest
-
 from infra_synth import gold as infra_gold
 from infra_synth import tasks as infra_tasks
 

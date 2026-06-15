@@ -37,8 +37,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 __all__ = ["main", "train", "build_config", "RunConfig", "parse_args"]
 
@@ -339,7 +340,13 @@ def _build_reverse_text(cfg: RunConfig) -> Any:
         phrase = " ".join(rng.choice(words) for _ in range(k))
         prompts.append(
             [
-                {"role": "system", "content": "Reverse the characters of the user's text. Output only the reversed text."},
+                {
+                    "role": "system",
+                    "content": (
+                        "Reverse the characters of the user's text. "
+                        "Output only the reversed text."
+                    ),
+                },
                 {"role": "user", "content": phrase},
             ]
         )

@@ -172,5 +172,7 @@ def test_infra_reward_batch_concurrent() -> None:
 
 def test_infra_reward_name_reflects_backend() -> None:
     # TRL logs reward metrics by __name__; it should encode the backend.
-    fn = make_infra_synth_reward(verifier_backend="sentinel", verifier=_StubVerifier(VerifyResult()))
+    fn = make_infra_synth_reward(
+        verifier_backend="sentinel", verifier=_StubVerifier(VerifyResult())
+    )
     assert fn.__name__ == "infra_synth_reward_sentinel"
