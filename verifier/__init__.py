@@ -4,22 +4,29 @@ This package defines the *stable contract* that every verifier backend and the
 `infra_synth` environment's reward functions agree on. The contract lives in
 :mod:`verifier.types` and is re-exported here.
 
-WHAT EXISTS NOW
----------------
-Only the frozen data contracts (:mod:`verifier.types`). Everything else is
-added by later work and MUST conform to the ``Verifier`` protocol below.
-
-WHAT LANDS LATER (do not assume these import yet)
--------------------------------------------------
-- ``verifier.backends``        : ``LocalDockerVerifier`` (builds a Dockerfile +
-                                 runs a smoke test locally) and ``LocalPyVerifier``.
-                                 Each implements the ``Verifier`` protocol.
-- ``verifier.sentinel_client`` : ``SentinelClient`` (thin async HTTP client for
-                                 the Sentinel sandbox) + ``SentinelVerifier``
-                                 (wraps it as a ``Verifier``).
+PUBLIC API
+----------
+- :mod:`verifier.types`        : the frozen data contracts (re-exported here).
+- ``get_verifier(name, ...)``  : factory -> a backend implementing ``Verifier``.
+                                 Names: ``static`` | ``local-py`` |
+                                 ``local-docker`` | ``sentinel``.
+- ``verifier.backends``        : ``StaticVerifier`` (in-process static analysis,
+                                 the fallback), ``LocalPyVerifier`` (weak local
+                                 subprocess baseline), ``LocalDockerVerifier``
+                                 (genuine build + smoke probe).
+- ``verifier.sentinel_client`` : ``SentinelClient`` (async HTTP client for the
+                                 Sentinel sandbox) + ``SentinelVerifier`` (the
+                                 hardened execution path).
 - ``verifier.reward``          : ``shape_reward(result, *, build_weight=0.3,
                                  smoke_weight=0.7, hack_penalty=0.0,
-                                 binary=False) -> float``.
+                                 binary=False) -> float`` and
+                                 ``result_to_metrics(result)``.
+- ``verifier.smoke.checks``    : ``check_dockerfile`` / ``build_python_harness``
+                                 / ``parse_harness_output`` (stdlib-only check
+                                 logic shared by every backend).
+
+This package stays importable with only ``httpx`` + stdlib (no
+``verifiers``/``torch``/``vllm``/``datasets``).
 
 Sentinel API targeted by ``sentinel_client`` (see README "Verifier backends"):
 ``POST /api/v1/submissions`` -> 202 ``{job_id, status}``; poll
@@ -34,6 +41,15 @@ avoid touching the backend modules.
 """
 from __future__ import annotations
 
+from .backends import (
+    LocalDockerVerifier,
+    LocalPyVerifier,
+    StaticVerifier,
+    get_verifier,
+)
+from .reward import result_to_metrics, shape_reward
+from .sentinel_client import SentinelClient, SentinelVerifier
+from .smoke.checks import build_python_harness, check_dockerfile, parse_harness_output
 from .types import (
     ArtifactKind,
     HackFlags,
@@ -44,10 +60,25 @@ from .types import (
 )
 
 __all__ = [
+    # frozen contracts
     "ArtifactKind",
     "ResourceLimits",
     "VerifySpec",
     "HackFlags",
     "VerifyResult",
     "Verifier",
+    # factory + backends
+    "get_verifier",
+    "StaticVerifier",
+    "LocalPyVerifier",
+    "LocalDockerVerifier",
+    "SentinelClient",
+    "SentinelVerifier",
+    # reward shaping
+    "shape_reward",
+    "result_to_metrics",
+    # smoke check helpers
+    "check_dockerfile",
+    "build_python_harness",
+    "parse_harness_output",
 ]
