@@ -62,42 +62,23 @@ _HACK_FIELDS = (
 # vf-free access to infra_synth.tasks
 # ---------------------------------------------------------------------------
 def _load_tasks_module() -> Any:
-    """Import ``infra_synth.tasks`` WITHOUT triggering the ``verifiers`` import.
+    """Import the vf-free ``infra_synth.tasks`` (task generation).
 
-    The env's package ``__init__`` imports the vf-wiring layer, so a plain
-    ``import infra_synth.tasks`` would require ``verifiers``. ``tasks`` is itself
-    vf-free; we import it directly off ``environments/infra_synth`` (the same
-    convention the committed ``tests/test_tasks.py`` uses), falling back to the
-    package import if that is how the box is set up.
+    Importing ``infra_synth`` is ``verifiers``-free: the package ``__init__``
+    only pulls in the vf-wiring layer, which imports ``verifiers`` lazily inside
+    ``load_environment`` (never at module load). So this runs without the heavy
+    training stack.
     """
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_pkg_dir = os.path.join(repo_root, "environments", "infra_synth")
-    if os.path.isdir(env_pkg_dir) and env_pkg_dir not in sys.path:
-        sys.path.insert(0, env_pkg_dir)
-    try:
-        import tasks as tasks_mod  # type: ignore[import-not-found]
+    from infra_synth import tasks as tasks_mod
 
-        return tasks_mod
-    except ImportError:
-        from infra_synth import tasks as tasks_mod  # type: ignore[no-redef]
-
-        return tasks_mod
+    return tasks_mod
 
 
 def _load_parser_module() -> Any:
     """Import the vf-free ``infra_synth.parser`` (Dockerfile extraction)."""
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_pkg_dir = os.path.join(repo_root, "environments", "infra_synth")
-    if os.path.isdir(env_pkg_dir) and env_pkg_dir not in sys.path:
-        sys.path.insert(0, env_pkg_dir)
-    try:
-        import parser as parser_mod  # type: ignore[import-not-found]
+    from infra_synth import parser as parser_mod
 
-        return parser_mod
-    except ImportError:
-        from infra_synth import parser as parser_mod  # type: ignore[no-redef]
-
-        return parser_mod
+    return parser_mod
 
 
 def _resolve_tasks(env_or_tasks: Any, *, seed: int) -> list[dict[str, Any]]:

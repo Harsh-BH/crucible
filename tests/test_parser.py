@@ -1,21 +1,7 @@
 """Tests for ``infra_synth.parser.extract_dockerfile`` (vf-free, stdlib-only)."""
 from __future__ import annotations
 
-import os
-import sys
-
-# The env package lives under environments/infra_synth and is not importable as
-# a top-level package; put its directory on sys.path so we can import the
-# vf-free helper modules directly (no `verifiers` / `datasets` needed).
-_PKG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "environments",
-    "infra_synth",
-)
-if _PKG_DIR not in sys.path:
-    sys.path.insert(0, _PKG_DIR)
-
-import parser as infra_parser  # noqa: E402
+from infra_synth import parser as infra_parser
 
 
 def test_single_dockerfile_block() -> None:

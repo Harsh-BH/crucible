@@ -1,19 +1,8 @@
 """Tests for ``infra_synth.tasks`` (vf-free; uses only stdlib + verifier.types)."""
 from __future__ import annotations
 
-import os
-import sys
-
-_PKG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "environments",
-    "infra_synth",
-)
-if _PKG_DIR not in sys.path:
-    sys.path.insert(0, _PKG_DIR)
-
-import tasks as infra_tasks  # noqa: E402
-from verifier.types import ArtifactKind, ResourceLimits, VerifySpec  # noqa: E402
+from infra_synth import tasks as infra_tasks
+from verifier.types import ArtifactKind, ResourceLimits, VerifySpec
 
 
 def _combo_key(info: dict) -> tuple:

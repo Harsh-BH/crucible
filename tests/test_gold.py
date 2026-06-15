@@ -6,21 +6,10 @@ The gold reference Dockerfile must (a) have the right structural properties and
 """
 from __future__ import annotations
 
-import os
-import sys
-
 import pytest
 
-_PKG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "environments",
-    "infra_synth",
-)
-if _PKG_DIR not in sys.path:
-    sys.path.insert(0, _PKG_DIR)
-
-import gold as infra_gold  # noqa: E402
-import tasks as infra_tasks  # noqa: E402
+from infra_synth import gold as infra_gold
+from infra_synth import tasks as infra_tasks
 
 # A representative sample across the grid (covers both frameworks and all deps).
 _SAMPLE = infra_tasks.generate_tasks(n=24, seed=0, split="train")

@@ -49,22 +49,15 @@ __all__ = [
 
 
 def _import_infra_tasks() -> Any:
-    """Lazily import the ``infra_synth`` task module, robust to install layout.
+    """Lazily import the ``infra_synth`` task module.
 
-    The env package ships a *flat* layout (``infra_synth.py`` alongside sibling
-    ``tasks.py`` / ``parser.py``), so an editable install puts the package dir
-    on ``sys.path``. Depending on how it was installed, the tasks live either at
-    ``infra_synth.tasks`` (package form) or top-level ``tasks`` (flat form). We
-    try the package form first, then fall back.
+    The env ships as a proper nested package (installed via ``pip install -e
+    ./environments/infra_synth`` or ``prime env install``), so its task module
+    imports cleanly as ``infra_synth.tasks``.
     """
-    try:
-        from infra_synth import tasks as infra_tasks  # type: ignore[no-redef]
+    from infra_synth import tasks as infra_tasks
 
-        return infra_tasks
-    except ImportError:
-        import tasks as infra_tasks  # type: ignore[no-redef]
-
-        return infra_tasks
+    return infra_tasks
 
 # A short instruction nudging the model to end with a boxed / explicit final
 # answer so the extractor (and the reward) is well-defined.
