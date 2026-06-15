@@ -1,0 +1,76 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+.installed.cfg
+develop-eggs/
+downloads/
+sdist/
+wheels/
+share/python-wheels/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ---- venvs / uv ----
+.venv/
+venv/
+env/
+ENV/
+.python-version
+# uv.lock is intentionally committed (kept for reproducible installs);
+# remove the next line if you prefer not to track it.
+# uv.lock
+
+# ---- env / secrets ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- experiment tracking / artifacts ----
+wandb/
+runs/
+outputs/
+checkpoints/
+*.ckpt
+*.pt
+*.safetensors
+mlruns/
+lightning_logs/
+
+# ---- data ----
+data/
+datasets/
+*.parquet
+*.arrow
+*.jsonl
+!tests/**/*.jsonl
+
+# ---- editor / OS ----
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- logs ----
+*.log
+logs/
