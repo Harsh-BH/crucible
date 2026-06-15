@@ -187,7 +187,7 @@ def build_gsm8k(
     chat: bool = True,
     dataset_name: str = "openai/gsm8k",
     dataset_subset: str = "main",
-) -> "Dataset":
+) -> Dataset:
     """Build a GSM8K dataset with ``prompt`` + ``answer`` (+ ``question``).
 
     Parameters
@@ -239,7 +239,7 @@ def build_infra_synth(
     seed: int = 0,
     *,
     chat: bool = True,
-) -> "Dataset":
+) -> Dataset:
     """Build an ``infra_synth`` dataset from :func:`infra_synth.tasks.generate_tasks`.
 
     Columns: ``prompt`` (chat or string, prefixed with the env
