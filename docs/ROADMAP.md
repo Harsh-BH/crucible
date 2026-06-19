@@ -54,9 +54,17 @@
   token-parroting artifact. **The C3 study spans all kinds** —
   `impossible_tasks(kind=...)` + `eval.c3_study.default_trials` grade gold-on-
   impossible across every kind (gold always fails → 0 undeserved passes, verified).
-  Remaining M4: **genuine** verifiers (`docker compose up`, `terraform validate`,
-  `kubeconform`) — code is in-repo-testable via mocked hooks, but real runs need a
-  docker daemon / those CLIs.
+- **M4 — genuine `docker compose` verifier (`LocalComposeVerifier`).** Compose is
+  no longer only a static stand-in: `get_verifier("local-compose")` writes the
+  model's `docker-compose.yml` + a build context (`infra_synth.scaffold.
+  compose_scaffold` = gold `Dockerfile` + `requirements.txt` + `app/`), runs
+  `docker compose up --build`, HTTP-probes the health path, and tears down.
+  **Verified against a live Docker daemon (29.4.2 / Compose 5.1.3):** gold compose
+  for FastAPI + Flask **builds + serves health → 200**; a path the server doesn't
+  serve correctly yields `smoke_ok=False` (the probe discriminates). The existing
+  `local-docker` Dockerfile verifier was re-confirmed end-to-end the same way.
+  Remaining genuine verifiers: `terraform validate`, `kubeconform` — need those
+  CLIs (heuristic stand-ins exist today).
 
 **Scaffolded but NOT yet executed (need real infra):**
 - A real GPU GRPO run (M1 "reward rises, ≥3 seeds").

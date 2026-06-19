@@ -29,7 +29,7 @@ from typing import Any
 
 from verifier.types import ArtifactKind, ResourceLimits, VerifySpec
 
-from .scaffold import app_scaffold
+from .scaffold import app_scaffold, compose_scaffold
 
 # ---------------------------------------------------------------------------
 # Parameter grid
@@ -636,8 +636,11 @@ def build_verify_spec(info: dict[str, Any]) -> VerifySpec:
       ``port`` / ``health_path`` / ``expect_status`` / ``must_contain`` /
       ``base_image_prefix`` from it). For Dockerfile tasks we attach a
       ``context_files`` map (the app scaffold the Dockerfile ``COPY``s) so
-      ``local-docker`` builds against a real app, not an empty context. A
-      caller-supplied ``context_files`` is left untouched.
+      ``local-docker`` builds against a real app, not an empty context. For
+      Compose tasks we attach the compose scaffold (the app scaffold PLUS a
+      working ``Dockerfile``) so a genuine ``docker compose up`` can resolve the
+      service's ``build: .``. A caller-supplied ``context_files`` is left
+      untouched.
     - :class:`ResourceLimits` is built from optional ``info['limits']`` fields,
       falling back to the contract defaults.
     """
@@ -662,6 +665,8 @@ def build_verify_spec(info: dict[str, Any]) -> VerifySpec:
     smoke = dict(info.get("smoke", {}))
     if kind == ArtifactKind.DOCKERFILE and "context_files" not in smoke:
         smoke["context_files"] = app_scaffold(info)
+    if kind == ArtifactKind.COMPOSE and "context_files" not in smoke:
+        smoke["context_files"] = compose_scaffold(info)
 
     return VerifySpec(
         spec_id=str(spec_id),

@@ -12,6 +12,9 @@ Backends span Crucible's weak->hardened execution axis:
                The deliberately weak execution baseline (C3 study).
 ``local-docker`` :class:`LocalDockerVerifier` -- the GENUINE ``docker build`` +
                ``docker run`` + HTTP health probe.
+``local-compose`` :class:`LocalComposeVerifier` -- GENUINE ``docker compose up
+               --build`` + HTTP health probe (the eval verifier for
+               :attr:`ArtifactKind.COMPOSE`).
 ``sentinel``   :class:`verifier.sentinel_client.SentinelVerifier` -- the same
                harness submitted to the hardened nsjail/cgroups sandbox.
 ============   =============================================================
@@ -44,6 +47,7 @@ __all__ = [
     "StaticVerifier",
     "LocalPyVerifier",
     "LocalDockerVerifier",
+    "LocalComposeVerifier",
     "get_verifier",
 ]
 
@@ -56,6 +60,32 @@ def _tail(s: str | bytes | None, n: int = _MAX_TAIL) -> str:
     if isinstance(s, bytes):
         s = s.decode("utf-8", "replace")
     return s[-n:]
+
+
+def _http_probe(url: str, expect_status: int, deadline_s: float) -> tuple[bool, str]:
+    """Poll ``url`` until it returns ``expect_status`` or the deadline elapses.
+
+    Shared by :class:`LocalDockerVerifier` and :class:`LocalComposeVerifier`
+    (both serve an HTTP health endpoint after a genuine build+run). Returns
+    ``(ok, detail)`` where ``detail`` is the last observed response/error.
+    """
+    end = time.monotonic() + deadline_s
+    last = ""
+    while time.monotonic() < end:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
+                code = resp.getcode()
+                if code == expect_status:
+                    return True, f"HTTP {code}"
+                last = f"HTTP {code}"
+        except urllib.error.HTTPError as e:
+            if e.code == expect_status:
+                return True, f"HTTP {e.code}"
+            last = f"HTTP {e.code}"
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            last = repr(e)
+        time.sleep(0.4)
+    return False, last or "no response before deadline"
 
 
 # ---------------------------------------------------------------------------
@@ -322,23 +352,7 @@ class LocalDockerVerifier:
 
     def _probe(self, url: str, expect_status: int, deadline_s: float) -> tuple[bool, str]:
         """Poll ``url`` until it returns ``expect_status`` or the deadline."""
-        end = time.monotonic() + deadline_s
-        last = ""
-        while time.monotonic() < end:
-            try:
-                with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
-                    code = resp.getcode()
-                    if code == expect_status:
-                        return True, f"HTTP {code}"
-                    last = f"HTTP {code}"
-            except urllib.error.HTTPError as e:
-                if e.code == expect_status:
-                    return True, f"HTTP {e.code}"
-                last = f"HTTP {e.code}"
-            except (urllib.error.URLError, OSError, ValueError) as e:
-                last = repr(e)
-            time.sleep(0.4)
-        return False, last or "no response before deadline"
+        return _http_probe(url, expect_status, deadline_s)
 
     def _docker_stop(self, container_id: str) -> None:
         try:
@@ -466,6 +480,175 @@ def _looks_like_oom(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# LocalComposeVerifier
+# ---------------------------------------------------------------------------
+class LocalComposeVerifier:
+    """Genuine ``docker compose up --build`` + HTTP smoke probe.
+
+    ``name='local-compose'``. The real (non-static) eval verifier for
+    :attr:`ArtifactKind.COMPOSE`: writes the artifact as ``docker-compose.yml``
+    plus its build context to a temp dir, brings the stack up detached
+    (``docker compose up -d --build``) under a unique project name, polls
+    ``http://localhost:<port><health_path>`` for ``expect_status`` (default
+    200), then tears everything down (``docker compose down -v``).
+    ``build_ok`` is the up/build outcome; ``smoke_ok`` is the probe outcome.
+
+    If the ``docker`` CLI is unavailable, :meth:`verify` returns
+    ``VerifyResult(build_ok=False, status='docker-unavailable')`` (it never
+    raises). All blocking work runs via :func:`asyncio.to_thread`.
+
+    The up/down steps are factored into overridable hooks (:meth:`_compose_up`,
+    :meth:`_probe`, :meth:`_compose_down`) so result mapping can be unit-tested
+    without a real daemon.
+    """
+
+    name = "local-compose"
+
+    def __init__(
+        self,
+        *,
+        time_limit_ms: int | None = None,
+        mem_mb: int | None = None,
+        docker_exe: str = "docker",
+        remove_volumes: bool = True,
+    ) -> None:
+        self.time_limit_ms = time_limit_ms
+        self.mem_mb = mem_mb
+        self.docker_exe = docker_exe
+        self.remove_volumes = remove_volumes
+
+    def _compose_available(self) -> bool:
+        # ``compose`` is a ``docker`` subcommand; the CLI on PATH is enough.
+        return shutil.which(self.docker_exe) is not None
+
+    async def verify(self, artifact: str, spec: VerifySpec) -> VerifyResult:
+        if not self._compose_available():
+            return VerifyResult(
+                backend=self.name,
+                status="docker-unavailable",
+                build_ok=False,
+                stderr_tail="docker CLI not found on PATH",
+            )
+        return await asyncio.to_thread(self._run_blocking, artifact, spec)
+
+    # -- overridable hooks (for testing) -----------------------------------
+    def _compose_up(
+        self, context_dir: str, project: str, mem_mb: int, timeout_s: float
+    ) -> subprocess.CompletedProcess:
+        cmd = [
+            self.docker_exe, "compose", "-p", project,
+            "-f", os.path.join(context_dir, "docker-compose.yml"),
+            "up", "-d", "--build",
+        ]
+        return subprocess.run(
+            cmd, cwd=context_dir, capture_output=True, text=True,
+            timeout=timeout_s, check=False,
+        )
+
+    def _probe(self, url: str, expect_status: int, deadline_s: float) -> tuple[bool, str]:
+        """Poll ``url`` until it returns ``expect_status`` or the deadline."""
+        return _http_probe(url, expect_status, deadline_s)
+
+    def _compose_down(self, context_dir: str, project: str) -> None:
+        cmd = [
+            self.docker_exe, "compose", "-p", project,
+            "-f", os.path.join(context_dir, "docker-compose.yml"),
+            "down",
+        ]
+        if self.remove_volumes:
+            cmd.append("-v")
+        try:
+            subprocess.run(
+                cmd, cwd=context_dir, capture_output=True, text=True,
+                timeout=60, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # -- orchestration ------------------------------------------------------
+    def _run_blocking(self, artifact: str, spec: VerifySpec) -> VerifyResult:
+        result = VerifyResult(backend=self.name)
+        limits = spec.limits
+        smoke = spec.smoke or {}
+        mem_mb = self.mem_mb if self.mem_mb is not None else limits.mem_mb
+        # Compose build can pull a base image + a db image: give it room.
+        up_timeout = (
+            self.time_limit_ms / 1000.0
+            if self.time_limit_ms is not None
+            else max(120.0, float(limits.wall_s) * 8.0)
+        )
+        port = smoke.get("port")
+        try:
+            port = int(port) if port is not None else 8000
+        except (TypeError, ValueError):
+            port = 8000
+        health_path = smoke.get("health_path", "/")
+        if not str(health_path).startswith("/"):
+            health_path = "/" + str(health_path)
+        expect_status = int(smoke.get("expect_status", 200))
+
+        # Unique project name so concurrent / leftover runs never collide.
+        project = f"crucible-compose-{os.getpid()}-{int(time.time() * 1000) & 0xffffff}"
+        t0 = time.monotonic()
+        tmpdir = tempfile.mkdtemp(prefix="crucible-compose-")
+        try:
+            with open(os.path.join(tmpdir, "docker-compose.yml"), "w", encoding="utf-8") as fh:
+                fh.write(artifact or "")
+
+            # Build context the compose services reference (Dockerfile,
+            # requirements.txt, app/…). ``context_files`` maps POSIX-relative
+            # paths -> contents; each must stay inside the temp dir (guard
+            # against ``..`` traversal).
+            for relpath, content in (smoke.get("context_files") or {}).items():
+                dest = os.path.normpath(os.path.join(tmpdir, relpath))
+                if dest != tmpdir and not dest.startswith(tmpdir + os.sep):
+                    raise ValueError(f"context_files path escapes build context: {relpath!r}")
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "w", encoding="utf-8") as fh:
+                    fh.write(content if isinstance(content, str) else str(content))
+
+            # --- build + up ---------------------------------------------
+            try:
+                up = self._compose_up(tmpdir, project, mem_mb, up_timeout)
+            except subprocess.TimeoutExpired as exc:
+                result.status = "compose-timeout"
+                result.stdout_tail = _tail(exc.stdout)
+                result.stderr_tail = _tail(exc.stderr)
+                result.hack_flags.timed_out = True
+                result.hack_flags.resource_exhaustion = True
+                result.wall_s = time.monotonic() - t0
+                return result
+
+            result.exit_code = up.returncode
+            result.stdout_tail = _tail(up.stdout)
+            up_err = up.stderr or ""
+            result.stderr_tail = _tail(up_err)
+            if up.returncode != 0:
+                result.status = "compose-up-failed"
+                if _looks_like_oom(up_err) or up.returncode == 137:
+                    result.hack_flags.oom_killed = True
+                    result.hack_flags.resource_exhaustion = True
+                result.wall_s = time.monotonic() - t0
+                return result
+
+            result.build_ok = True
+            result.status = "up"
+
+            # --- probe --------------------------------------------------
+            probe_deadline = max(5.0, float(limits.wall_s))
+            url = f"http://localhost:{port}{health_path}"
+            ok, detail = self._probe(url, expect_status, probe_deadline)
+            result.smoke_ok = ok
+            result.status = "smoke-ok" if ok else "smoke-failed"
+            result.stderr_tail = _tail(result.stderr_tail + "\nprobe: " + detail)
+            result.wall_s = time.monotonic() - t0
+            return result
+        finally:
+            self._compose_down(tmpdir, project)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 def get_verifier(
@@ -478,9 +661,10 @@ def get_verifier(
 ) -> Verifier:
     """Construct a verifier backend by ``name``.
 
-    ``name`` in ``{"static", "local-py", "local-docker", "sentinel"}``. Extra
-    ``kwargs`` are forwarded to the backend constructor. ``base_url`` is used by
-    ``sentinel``. Raises :class:`ValueError` on an unknown name.
+    ``name`` in ``{"static", "local-py", "local-docker", "local-compose",
+    "sentinel"}``. Extra ``kwargs`` are forwarded to the backend constructor.
+    ``base_url`` is used by ``sentinel``. Raises :class:`ValueError` on an
+    unknown name.
 
     ``verifier.sentinel_client`` is imported lazily so ``import verifier`` stays
     cheap and never requires a running Sentinel.
@@ -495,6 +679,10 @@ def get_verifier(
         return LocalDockerVerifier(
             time_limit_ms=time_limit_ms, mem_mb=mem_mb, **kwargs  # type: ignore[arg-type]
         )
+    if name == "local-compose":
+        return LocalComposeVerifier(
+            time_limit_ms=time_limit_ms, mem_mb=mem_mb, **kwargs  # type: ignore[arg-type]
+        )
     if name == "sentinel":
         from .sentinel_client import SentinelVerifier  # lazy
 
@@ -504,5 +692,5 @@ def get_verifier(
         return SentinelVerifier(**kw)  # type: ignore[arg-type]
     raise ValueError(
         f"unknown verifier name {name!r}; expected one of "
-        "'static', 'local-py', 'local-docker', 'sentinel'"
+        "'static', 'local-py', 'local-docker', 'local-compose', 'sentinel'"
     )

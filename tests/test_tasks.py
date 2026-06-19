@@ -193,9 +193,51 @@ def test_compose_build_verify_spec_kind() -> None:
         spec = infra_tasks.build_verify_spec(t["info"])
         assert isinstance(spec, VerifySpec)
         assert spec.kind is ArtifactKind.COMPOSE
-        # No Dockerfile scaffold is attached on the compose path.
-        assert "context_files" not in spec.smoke
+        # A compose build context is attached (so `docker compose up` can build).
+        cf = spec.smoke["context_files"]
+        assert "Dockerfile" in cf
+        assert "requirements.txt" in cf
+        assert "app/main.py" in cf
+        assert cf["Dockerfile"].startswith("FROM ")
         assert spec.smoke["dependency_service"] == t["info"]["smoke"]["dependency_service"]
+
+
+def test_compose_build_verify_spec_attaches_compose_scaffold() -> None:
+    from infra_synth import gold as infra_gold
+
+    tasks = infra_tasks.generate_tasks(n=8, seed=0, split="test", kind="compose")
+    assert tasks
+    for t in tasks:
+        info = t["info"]
+        spec = infra_tasks.build_verify_spec(info)
+        cf = spec.smoke["context_files"]
+        # The compose scaffold = app scaffold PLUS the gold Dockerfile.
+        assert set(cf) == {
+            "Dockerfile",
+            "requirements.txt",
+            "app/__init__.py",
+            "app/main.py",
+        }
+        assert cf["Dockerfile"] == infra_gold.gold_dockerfile(info)
+
+
+def test_compose_build_verify_spec_respects_caller_context_files() -> None:
+    info = infra_tasks.generate_tasks(n=1, seed=0, split="test", kind="compose")[0]["info"]
+    info["smoke"] = dict(info["smoke"], context_files={"custom.txt": "hi"})
+    spec = infra_tasks.build_verify_spec(info)
+    assert spec.smoke["context_files"] == {"custom.txt": "hi"}
+
+
+def test_dockerfile_build_verify_spec_unchanged_by_compose_scaffold() -> None:
+    # The Dockerfile path still gets the app scaffold (no Dockerfile key).
+    tasks = infra_tasks.generate_tasks(n=6, seed=2, split="train")
+    assert tasks
+    for t in tasks:
+        spec = infra_tasks.build_verify_spec(t["info"])
+        assert spec.kind is ArtifactKind.DOCKERFILE
+        cf = spec.smoke["context_files"]
+        assert set(cf) == {"requirements.txt", "app/__init__.py", "app/main.py"}
+        assert "Dockerfile" not in cf
 
 
 def test_compose_system_prompt_constrains_output() -> None:

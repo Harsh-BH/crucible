@@ -9,11 +9,14 @@ PUBLIC API
 - :mod:`verifier.types`        : the frozen data contracts (re-exported here).
 - ``get_verifier(name, ...)``  : factory -> a backend implementing ``Verifier``.
                                  Names: ``static`` | ``local-py`` |
-                                 ``local-docker`` | ``sentinel``.
+                                 ``local-docker`` | ``local-compose`` |
+                                 ``sentinel``.
 - ``verifier.backends``        : ``StaticVerifier`` (in-process static analysis,
                                  the fallback), ``LocalPyVerifier`` (weak local
                                  subprocess baseline), ``LocalDockerVerifier``
-                                 (genuine build + smoke probe).
+                                 (genuine build + smoke probe),
+                                 ``LocalComposeVerifier`` (genuine ``docker
+                                 compose up`` + smoke probe).
 - ``verifier.sentinel_client`` : ``SentinelClient`` (async HTTP client for the
                                  Sentinel sandbox) + ``SentinelVerifier`` (the
                                  hardened execution path).
@@ -45,6 +48,7 @@ avoid touching the backend modules.
 from __future__ import annotations
 
 from .backends import (
+    LocalComposeVerifier,
     LocalDockerVerifier,
     LocalPyVerifier,
     StaticVerifier,
@@ -84,6 +88,7 @@ __all__ = [
     "StaticVerifier",
     "LocalPyVerifier",
     "LocalDockerVerifier",
+    "LocalComposeVerifier",
     "SentinelClient",
     "SentinelVerifier",
     # reward shaping

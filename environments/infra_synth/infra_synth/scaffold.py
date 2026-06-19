@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .gold import gold_dockerfile
+
 
 def _fastapi_main(health: str) -> str:
     return (
@@ -61,4 +63,26 @@ def app_scaffold(info: dict[str, Any]) -> dict[str, str]:
     }
 
 
-__all__ = ["app_scaffold"]
+def compose_scaffold(info: dict[str, Any]) -> dict[str, str]:
+    """Return the full build context a genuine ``docker compose up --build`` needs.
+
+    The model's Compose task emits a ``docker-compose.yml`` whose ``web`` service
+    uses ``build: .`` -- so the context it builds against must contain a
+    ``Dockerfile`` (plus the app the Dockerfile ``COPY``s). This is the Compose
+    analog of :func:`app_scaffold` for plain Dockerfile tasks (NS-2): with this
+    context written alongside the model's compose file, the verifier can run
+    ``docker compose up`` and the smoke probe hits a live server (not an empty
+    context where ``build: .`` has nothing to build).
+
+    Returns a ``{relative_path: content}`` map combining :func:`app_scaffold`
+    (``requirements.txt`` + ``app/__init__.py`` + ``app/main.py``) with a
+    working ``Dockerfile`` -- reusing the already build+serve-verified reference
+    from :func:`infra_synth.gold.gold_dockerfile`. Keys: ``Dockerfile``,
+    ``requirements.txt``, ``app/__init__.py``, ``app/main.py``.
+    """
+    files = app_scaffold(info)
+    files["Dockerfile"] = gold_dockerfile(info)
+    return files
+
+
+__all__ = ["app_scaffold", "compose_scaffold"]

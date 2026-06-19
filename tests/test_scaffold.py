@@ -11,7 +11,7 @@ import os
 import subprocess
 
 import pytest
-from infra_synth import scaffold, tasks
+from infra_synth import gold, scaffold, tasks
 
 from verifier.backends import LocalDockerVerifier
 from verifier.types import ArtifactKind, ResourceLimits, VerifySpec
@@ -31,6 +31,16 @@ def _info(framework: str = "fastapi", dep: str = "postgres") -> dict:
     raise AssertionError(f"no task for {framework}/{dep}")
 
 
+def _compose_info(framework: str = "fastapi", dep: str = "postgres") -> dict:
+    """A compose-kind task info dict for one combo (mirrors _compose_info_for)."""
+    for split in ("train", "test"):
+        for t in tasks.generate_tasks(seed=0, split=split, kind="compose"):
+            i = t["info"]
+            if i["framework"] == framework and i["dependency"] == dep:
+                return i
+    raise AssertionError(f"no compose task for {framework}/{dep}")
+
+
 def test_app_scaffold_fastapi() -> None:
     files = scaffold.app_scaffold(_info("fastapi", "postgres"))
     assert set(files) == {"requirements.txt", "app/__init__.py", "app/main.py"}
@@ -47,6 +57,33 @@ def test_app_scaffold_flask_serves_requested_health_path() -> None:
     files = scaffold.app_scaffold(info)
     assert "Flask" in files["app/main.py"]
     assert f'@app.get("{health}")' in files["app/main.py"]
+
+
+def test_compose_scaffold_includes_dockerfile_and_app() -> None:
+    info = _compose_info("fastapi", "postgres")
+    files = scaffold.compose_scaffold(info)
+    # The compose context = app scaffold PLUS a working Dockerfile.
+    assert set(files) == {
+        "Dockerfile",
+        "requirements.txt",
+        "app/__init__.py",
+        "app/main.py",
+    }
+    df = files["Dockerfile"]
+    assert df and df.startswith("FROM ")
+    # The Dockerfile is exactly the build+serve-verified gold reference.
+    assert df == gold.gold_dockerfile(info)
+    # The app scaffold files are carried through unchanged.
+    assert "FastAPI" in files["app/main.py"]
+    assert "fastapi" in files["requirements.txt"]
+    assert "psycopg2-binary" in files["requirements.txt"]
+
+
+def test_compose_scaffold_flask_dockerfile_matches_gold() -> None:
+    info = _compose_info("flask", "none")
+    files = scaffold.compose_scaffold(info)
+    assert files["Dockerfile"] == gold.gold_dockerfile(info)
+    assert "Flask" in files["app/main.py"]
 
 
 def test_build_verify_spec_injects_context_files() -> None:

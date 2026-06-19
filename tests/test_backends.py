@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from verifier import (
+    LocalComposeVerifier,
     LocalDockerVerifier,
     LocalPyVerifier,
     SentinelVerifier,
@@ -308,6 +309,7 @@ def test_factory_types() -> None:
     assert isinstance(get_verifier("static"), StaticVerifier)
     assert isinstance(get_verifier("local-py"), LocalPyVerifier)
     assert isinstance(get_verifier("local-docker"), LocalDockerVerifier)
+    assert isinstance(get_verifier("local-compose"), LocalComposeVerifier)
     assert isinstance(get_verifier("sentinel"), SentinelVerifier)
     # default
     assert isinstance(get_verifier(), StaticVerifier)
@@ -336,7 +338,7 @@ def test_factory_unknown_raises() -> None:
 
 
 def test_factory_returns_protocol() -> None:
-    for name in ("static", "local-py", "local-docker", "sentinel"):
+    for name in ("static", "local-py", "local-docker", "local-compose", "sentinel"):
         assert isinstance(get_verifier(name), Verifier)
         assert get_verifier(name).name == name
 
@@ -431,3 +433,99 @@ async def test_local_docker_real_build_returns_result() -> None:
         "smoke-ok", "smoke-failed", "build-failed", "built", "run-failed",
         "build-timeout", "run-timeout",
     }
+
+
+# --- LocalComposeVerifier: mapping unit-tested with faked steps ------------
+async def test_local_compose_unavailable(monkeypatch) -> None:
+    v = LocalComposeVerifier()
+    monkeypatch.setattr(v, "_compose_available", lambda: False)
+    res = await v.verify(GOOD_COMPOSE, _compose_spec(port=8000))
+    assert res.backend == "local-compose"
+    assert res.status == "docker-unavailable"
+    assert res.build_ok is False
+    assert res.stderr_tail == "docker CLI not found on PATH"
+
+
+async def test_local_compose_full_success_mapping(monkeypatch) -> None:
+    v = LocalComposeVerifier()
+    monkeypatch.setattr(v, "_compose_available", lambda: True)
+    monkeypatch.setattr(v, "_compose_up", lambda *a, **k: _ok_proc("up"))
+    monkeypatch.setattr(v, "_probe", lambda url, status, dl: (True, "HTTP 200"))
+    torn = {}
+    monkeypatch.setattr(
+        v, "_compose_down", lambda ctx, project: torn.setdefault("project", project)
+    )
+
+    res = await v.verify(GOOD_COMPOSE, _compose_spec(port=8000, health_path="/health"))
+    assert res.build_ok is True
+    assert res.smoke_ok is True
+    assert res.status == "smoke-ok"
+    assert torn["project"].startswith("crucible-compose-")  # teardown happened
+
+
+async def test_local_compose_smoke_failure_mapping(monkeypatch) -> None:
+    v = LocalComposeVerifier()
+    monkeypatch.setattr(v, "_compose_available", lambda: True)
+    monkeypatch.setattr(v, "_compose_up", lambda *a, **k: _ok_proc("up"))
+    monkeypatch.setattr(v, "_probe", lambda url, status, dl: (False, "no response"))
+    monkeypatch.setattr(v, "_compose_down", lambda ctx, project: None)
+    res = await v.verify(GOOD_COMPOSE, _compose_spec(port=8000))
+    assert res.build_ok is True  # came up fine
+    assert res.smoke_ok is False  # but never served
+    assert res.status == "smoke-failed"
+
+
+async def test_local_compose_up_failure_mapping(monkeypatch) -> None:
+    v = LocalComposeVerifier()
+    monkeypatch.setattr(v, "_compose_available", lambda: True)
+    monkeypatch.setattr(v, "_compose_up", lambda *a, **k: _ok_proc("", "boom", rc=1))
+    monkeypatch.setattr(v, "_compose_down", lambda ctx, project: None)
+    res = await v.verify(GOOD_COMPOSE, _compose_spec(port=8000))
+    assert res.build_ok is False
+    assert res.smoke_ok is False
+    assert res.status == "compose-up-failed"
+    assert res.exit_code == 1
+
+
+async def test_local_compose_timeout_mapping(monkeypatch) -> None:
+    v = LocalComposeVerifier()
+    monkeypatch.setattr(v, "_compose_available", lambda: True)
+
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="docker compose up", timeout=1)
+
+    monkeypatch.setattr(v, "_compose_up", timeout)
+    monkeypatch.setattr(v, "_compose_down", lambda ctx, project: None)
+    res = await v.verify(GOOD_COMPOSE, _compose_spec(port=8000))
+    assert res.status == "compose-timeout"
+    assert res.hack_flags.timed_out is True
+    assert res.hack_flags.resource_exhaustion is True
+
+
+async def test_local_compose_oom_on_up_maps_flags(monkeypatch) -> None:
+    v = LocalComposeVerifier()
+    monkeypatch.setattr(v, "_compose_available", lambda: True)
+    monkeypatch.setattr(v, "_compose_up", lambda *a, **k: _ok_proc("", "Killed", rc=137))
+    monkeypatch.setattr(v, "_compose_down", lambda ctx, project: None)
+    res = await v.verify(GOOD_COMPOSE, _compose_spec(port=8000))
+    assert res.status == "compose-up-failed"
+    assert res.build_ok is False
+    assert res.hack_flags.oom_killed is True
+    assert res.hack_flags.resource_exhaustion is True
+
+
+async def test_local_compose_context_files_traversal_guard(monkeypatch) -> None:
+    # A context_files key escaping the build context must raise (no write
+    # outside the temp dir) -- same guard as LocalDockerVerifier.
+    v = LocalComposeVerifier()
+    monkeypatch.setattr(v, "_compose_available", lambda: True)
+    # _compose_up should never be reached; fail loudly if it is.
+    monkeypatch.setattr(
+        v, "_compose_up", lambda *a, **k: pytest.fail("up reached despite bad path")
+    )
+    down = {}
+    monkeypatch.setattr(v, "_compose_down", lambda ctx, project: down.setdefault("hit", True))
+    spec = _compose_spec(port=8000, context_files={"../evil": "x"})
+    with pytest.raises(ValueError, match="escapes build context"):
+        await v.verify(GOOD_COMPOSE, spec)
+    assert down.get("hit") is True  # teardown still ran in finally
