@@ -211,3 +211,86 @@ def test_compose_unknown_kind_raises() -> None:
 
     with pytest.raises(ValueError):
         infra_tasks.generate_tasks(kind="terraform")
+
+
+# --- ci-yaml kind ----------------------------------------------------------
+def test_ci_yaml_task_shape_and_locked_smoke_keys() -> None:
+    tasks = infra_tasks.generate_tasks(n=12, seed=0, split="test", kind="ci-yaml")
+    assert tasks
+    for t in tasks:
+        info = t["info"]
+        assert info["kind"] == ArtifactKind.CI_YAML.value == "ci-yaml"
+        assert info["spec_id"].startswith("ci-")
+        smoke = info["smoke"]
+        # Locked ci-yaml smoke contract: must_contain + required_steps only.
+        assert set(smoke) == {"must_contain", "required_steps"}
+        assert smoke["must_contain"] == [
+            "on:",
+            "jobs:",
+            "runs-on:",
+            "steps:",
+            "actions/checkout",
+        ]
+        assert smoke["required_steps"] == ["checkout", "setup", "install", "test"]
+        # A CI workflow has no server to probe -> no port/health keys.
+        assert "port" not in smoke
+        assert "health_path" not in smoke
+
+
+def test_ci_yaml_deterministic_for_seed() -> None:
+    a = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="ci-yaml")
+    b = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="ci-yaml")
+    assert [t["question"] for t in a] == [t["question"] for t in b]
+    assert [t["info"]["spec_id"] for t in a] == [t["info"]["spec_id"] for t in b]
+
+
+def test_ci_yaml_ids_disjoint_from_other_kinds() -> None:
+    df = infra_tasks.generate_tasks(n=12, seed=0, split="train")
+    comp = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="compose")
+    ci = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="ci-yaml")
+    df_ids = {t["info"]["spec_id"] for t in df}
+    comp_ids = {t["info"]["spec_id"] for t in comp}
+    ci_ids = {t["info"]["spec_id"] for t in ci}
+    assert ci_ids.isdisjoint(df_ids)
+    assert ci_ids.isdisjoint(comp_ids)
+
+
+def test_ci_yaml_build_verify_spec_kind() -> None:
+    tasks = infra_tasks.generate_tasks(n=6, seed=2, split="train", kind="ci-yaml")
+    assert tasks
+    for t in tasks:
+        spec = infra_tasks.build_verify_spec(t["info"])
+        assert isinstance(spec, VerifySpec)
+        assert spec.kind is ArtifactKind.CI_YAML
+        # No Dockerfile scaffold is attached on the ci-yaml path.
+        assert "context_files" not in spec.smoke
+        assert spec.smoke["required_steps"] == ["checkout", "setup", "install", "test"]
+
+
+def test_ci_yaml_system_prompt_constrains_output() -> None:
+    sp = infra_tasks.CI_YAML_SYSTEM_PROMPT
+    assert "```yaml" in sp
+    assert "ONLY" in sp
+    assert "jobs:" in sp
+    assert "<think>" in sp  # explicitly forbids think blocks
+
+
+def test_dockerfile_and_compose_unchanged_by_ci_yaml_addition() -> None:
+    # Adding the ci-yaml kind must not perturb the other kinds' output.
+    df = infra_tasks.generate_tasks(n=10, seed=5, split="train")
+    df_explicit = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="dockerfile")
+    comp = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="compose")
+    comp2 = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="compose")
+    assert df == df_explicit
+    assert comp == comp2
+    # ci-yaml shares the same split pool/order, only the rendered artifact differs.
+    # (ci-yaml smoke has no port/health, so compare the shared grid fields + order
+    # via the spec_id suffix the base_id encodes.)
+    ci = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="ci-yaml")
+    df_lfd = [(t["info"]["language"], t["info"]["framework"], t["info"]["dependency"]) for t in df]
+    ci_lfd = [(t["info"]["language"], t["info"]["framework"], t["info"]["dependency"]) for t in ci]
+    assert df_lfd == ci_lfd
+    # The ci-<base_id> suffix must equal the Dockerfile spec_id (same pool order).
+    assert [t["info"]["spec_id"] for t in df] == [
+        t["info"]["spec_id"].removeprefix("ci-") for t in ci
+    ]

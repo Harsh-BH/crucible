@@ -106,3 +106,44 @@ def test_compose_tolerates_prose() -> None:
 def test_compose_no_block_returns_empty() -> None:
     assert infra_parser.extract_compose("no code here at all") == ""
     assert infra_parser.extract_compose("") == ""
+
+
+# --- extract_ci_yaml -------------------------------------------------------
+def test_ci_yaml_single_yaml_block() -> None:
+    text = "Here:\n```yaml\non:\n  push:\njobs:\n  test:\n```\n"
+    assert infra_parser.extract_ci_yaml(text) == "on:\n  push:\njobs:\n  test:"
+
+
+def test_ci_yaml_yml_tag() -> None:
+    text = "```yml\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n```"
+    out = infra_parser.extract_ci_yaml(text)
+    assert out.startswith("on: [push]")
+    assert "runs-on: ubuntu-latest" in out
+
+
+def test_ci_yaml_takes_last_yaml_block() -> None:
+    text = (
+        "Draft:\n```yaml\non: [push]\njobs: {}\n```\n"
+        "Final:\n```yaml\non:\n  push:\njobs:\n  test:\n    runs-on: ubuntu-latest\n```\n"
+    )
+    out = infra_parser.extract_ci_yaml(text)
+    assert out.startswith("on:\n  push:")
+    assert "runs-on: ubuntu-latest" in out
+
+
+def test_ci_yaml_tolerates_prose() -> None:
+    text = (
+        "Let me think about the triggers and jobs...\n\n"
+        "```yaml\nname: ci\non:\n  push:\njobs:\n  test:\n    runs-on: ubuntu-latest\n"
+        "    steps:\n      - uses: actions/checkout@v4\n```\n\n"
+        "Done."
+    )
+    out = infra_parser.extract_ci_yaml(text)
+    assert out.startswith("name: ci")
+    assert "Let me think" not in out
+    assert "actions/checkout@v4" in out
+
+
+def test_ci_yaml_no_block_returns_empty() -> None:
+    assert infra_parser.extract_ci_yaml("no code here at all") == ""
+    assert infra_parser.extract_ci_yaml("") == ""

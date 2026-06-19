@@ -149,7 +149,8 @@ def load_environment(
         default — historical behavior unchanged) selects the Dockerfile parser,
         system prompt, and task generation; ``"compose"`` selects the
         ``docker-compose.yml`` parser / prompt / tasks (graded by
-        ``check_compose`` on the static path).
+        ``check_compose`` on the static path); ``"ci-yaml"`` selects the GitHub
+        Actions workflow parser / prompt / tasks (graded by ``check_ci_yaml``).
     build_weight, smoke_weight, hack_penalty:
         Reward-shaping weights forwarded to ``verifier.shape_reward``.
     num_tasks, seed, split:
@@ -164,6 +165,9 @@ def load_environment(
     if artifact_kind == "compose":
         extract_fn = parser_mod.extract_compose
         system_prompt = tasks_mod.COMPOSE_SYSTEM_PROMPT
+    elif artifact_kind == "ci-yaml":
+        extract_fn = parser_mod.extract_ci_yaml
+        system_prompt = tasks_mod.CI_YAML_SYSTEM_PROMPT
     else:
         extract_fn = parser_mod.extract_dockerfile
         system_prompt = tasks_mod.SYSTEM_PROMPT
@@ -306,5 +310,6 @@ def load_environment(
 # Re-export the gold helpers for convenience (eval references / sanity checks).
 gold_dockerfile = gold_mod.gold_dockerfile
 gold_compose = gold_mod.gold_compose
+gold_ci_yaml = gold_mod.gold_ci_yaml
 
-__all__ = ["load_environment", "gold_dockerfile", "gold_compose"]
+__all__ = ["load_environment", "gold_dockerfile", "gold_compose", "gold_ci_yaml"]

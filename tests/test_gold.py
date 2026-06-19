@@ -83,3 +83,19 @@ def test_gold_compose_passes_static_check(task: dict) -> None:
     result = checks.check_compose(yml, spec)
     assert result["build_ok"] is True, result.get("reasons")
     assert result["smoke_ok"] is True, result.get("reasons")
+
+
+# --- ci-yaml gold-passes-its-own-spec CRUX (multi-kind analog) -------------
+_CI_YAML_SAMPLE = infra_tasks.generate_tasks(n=12, seed=0, split="test", kind="ci-yaml")
+
+
+@pytest.mark.parametrize(
+    "task", _CI_YAML_SAMPLE, ids=[t["info"]["spec_id"] for t in _CI_YAML_SAMPLE]
+)
+def test_gold_ci_yaml_passes_static_check(task: dict) -> None:
+    info = task["info"]
+    yml = infra_gold.gold_ci_yaml(info)
+    spec = infra_tasks.build_verify_spec(info)
+    result = checks.check_ci_yaml(yml, spec)
+    assert result["build_ok"] is True, result.get("reasons")
+    assert result["smoke_ok"] is True, result.get("reasons")

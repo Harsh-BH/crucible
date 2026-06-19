@@ -42,17 +42,20 @@
   taxonomy + an undeserved-pass metric. Demonstrated with the simulated sandbox
   (`--mock`): the hardened side closes `resource_manipulation` (mem/timer) that
   weak lets pass. The **live weak-vs-hardened numbers** still await NS-4.
-- **M4 (started) — Docker Compose artifact kind, end-to-end (static path).** The
-  static checker is now **kind-dispatched** (`verifier.smoke.checks.check_artifact`
-  + a per-kind harness builder); `check_compose` is a stdlib-only heuristic
-  stand-in (no PyYAML). The env gained `extract_compose`, `gold_compose`,
-  `generate_tasks(kind="compose")`, `COMPOSE_SYSTEM_PROMPT`, and
-  `load_environment(artifact_kind="compose")`. Verified: gold compose passes its
-  own spec via the in-process static check **and** the inlined `local-py` harness
+- **M4 (started) — Docker Compose + GitHub Actions CI-YAML artifact kinds,
+  end-to-end (static path).** The static checker is now **kind-dispatched**
+  (`verifier.smoke.checks.check_artifact` + a per-kind harness builder);
+  `check_compose` and `check_ci_yaml` are stdlib-only heuristic stand-ins (no
+  PyYAML). The env gained `extract_compose`/`extract_ci_yaml`,
+  `gold_compose`/`gold_ci_yaml`, `generate_tasks(kind="compose"|"ci-yaml")`,
+  `COMPOSE_SYSTEM_PROMPT`/`CI_YAML_SYSTEM_PROMPT`, and
+  `load_environment(artifact_kind=...)`. Verified per kind: gold passes its own
+  spec via the in-process static check **and** the inlined `local-py` harness
   (0 parity mismatches), and `spec_gaming` fires on a trivial token-parroting
-  compose — so the C3 reward-hacking signal extends to compose too. Remaining M4
-  kinds (Terraform `validate`, k8s `kubeconform`, CI-YAML) need external CLIs and
-  a genuine `docker compose up` verifier (vs the static stand-in).
+  artifact — so the C3 reward-hacking signal extends to both new kinds.
+  Remaining M4 kinds (Terraform `validate`, k8s `kubeconform`) need external
+  CLIs; a genuine `docker compose up` verifier (vs the static stand-in) is also
+  future work.
 
 **Scaffolded but NOT yet executed (need real infra):**
 - A real GPU GRPO run (M1 "reward rises, ≥3 seeds").
