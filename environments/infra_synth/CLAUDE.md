@@ -16,13 +16,19 @@ spec `pyproject.toml` sits one level up. Depends on `crucible-verifier`.
   `ArtifactKind` is wired end-to-end through the static path: pass
   `artifact_kind="compose"` to `load_environment` (or `kind="compose"` to
   `generate_tasks`) to emit/grade a `docker-compose.yml` instead of a Dockerfile
-  (graded by `check_compose`); `"dockerfile"` stays the default.
+  (graded by `check_compose`); `"dockerfile"` stays the default. A third
+  `ArtifactKind` is wired the same way: `artifact_kind="ci-yaml"` (or
+  `kind="ci-yaml"`) emits/grades a GitHub Actions workflow (graded by
+  `check_ci_yaml`).
 - `infra_synth/parser.py` — `extract_dockerfile()` pulls the last fenced
   ```dockerfile block from a completion; `extract_compose()` pulls the last
-  ```yaml/```yml/```compose block (Docker Compose support).
+  ```yaml/```yml/```compose block (Docker Compose support); `extract_ci_yaml()`
+  pulls the last ```yaml/```yml block (GitHub Actions workflow support).
 - `infra_synth/gold.py` — `gold_dockerfile(info)` renders a correct reference
   (eval references + the gold-passes-its-own-spec test); `gold_compose(info)`
-  renders a correct reference `docker-compose.yml` that passes `check_compose`.
+  renders a correct reference `docker-compose.yml` that passes `check_compose`;
+  `gold_ci_yaml(info)` renders a correct reference workflow that passes
+  `check_ci_yaml`.
 - `infra_synth/scaffold.py` — `app_scaffold(info)` returns the build-context
   files a realistic Dockerfile `COPY`s (`requirements.txt` + a minimal
   FastAPI/Flask `app` serving the task's health path). `build_verify_spec`

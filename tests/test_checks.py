@@ -8,6 +8,7 @@ import sys
 from verifier.smoke.checks import (
     build_python_harness,
     check_artifact,
+    check_ci_yaml,
     check_compose,
     check_dockerfile,
     parse_harness_output,
@@ -351,5 +352,168 @@ def test_compose_harness_roundtrips_and_matches_static() -> None:
     assert parsed is not None
     # Parity with the in-process compose check (same source of truth).
     inproc = check_compose(GOOD_COMPOSE, spec)
+    assert parsed["build_ok"] == inproc["build_ok"] is True
+    assert parsed["smoke_ok"] == inproc["smoke_ok"] is True
+
+
+# --- GitHub Actions CI-YAML (kind == CI_YAML) ------------------------------
+GOOD_CI_YAML = """\
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest
+"""
+
+# Missing the install + test run steps (build_ok stays True, smoke_ok False).
+NO_TEST_STEP_CI_YAML = """\
+name: CI
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+"""
+
+# No 'on:' trigger and no 'jobs:' -> not buildable.
+NO_ON_NO_JOBS_CI_YAML = """\
+name: CI
+env:
+  FOO: bar
+"""
+
+# Pure token parroting: the must_contain substrings live in comments / a bare
+# top-level key, with no real job body (no runs-on:, no steps list item).
+TRIVIAL_CI_YAML = """\
+# jobs:
+# runs-on: ubuntu-latest
+# steps:
+# actions/checkout
+on: [push]
+jobs:
+"""
+
+# Harder parrot: satisfies EVERY must_contain token with real bare keys
+# (`runs-on:`, `steps:` are themselves required tokens) yet has no step list
+# items. Keying spec_gaming on `has_runs_on` would miss this; it must key on
+# the absence of real steps (step_count == 0).
+TOKEN_SATISFYING_CI_PARROT = """\
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+actions/checkout
+"""
+
+
+def _ci_yaml_spec(**smoke) -> VerifySpec:
+    return VerifySpec(spec_id="ci", kind=ArtifactKind.CI_YAML, smoke=smoke)
+
+
+def _full_ci_yaml_smoke() -> dict:
+    return dict(
+        must_contain=["on:", "jobs:", "runs-on:", "steps:", "actions/checkout"],
+        required_steps=["checkout", "setup", "install", "test"],
+    )
+
+
+def test_good_ci_yaml_build_and_smoke_ok() -> None:
+    spec = _ci_yaml_spec(**_full_ci_yaml_smoke())
+    out = check_ci_yaml(GOOD_CI_YAML, spec)
+    assert out["build_ok"] is True
+    assert out["smoke_ok"] is True
+    sig = out["signals"]
+    assert sig["has_on"] is True
+    assert sig["has_jobs"] is True
+    assert sig["job_count"] == 1
+    assert sig["has_runs_on"] is True
+    assert sig["step_count"] == 4
+    assert sig["steps_found"] == {
+        "checkout": True,
+        "setup": True,
+        "install": True,
+        "test": True,
+    }
+    assert sig["spec_gaming"] is False
+
+
+def test_check_artifact_routes_ci_yaml() -> None:
+    # check_artifact must dispatch CI_YAML -> check_ci_yaml (same result).
+    spec = _ci_yaml_spec(**_full_ci_yaml_smoke())
+    assert check_artifact(GOOD_CI_YAML, spec) == check_ci_yaml(GOOD_CI_YAML, spec)
+
+
+def test_ci_yaml_missing_jobs_and_on_fails_build() -> None:
+    spec = _ci_yaml_spec(must_contain=["name:"])
+    out = check_ci_yaml(NO_ON_NO_JOBS_CI_YAML, spec)
+    assert out["build_ok"] is False
+    assert out["signals"]["has_on"] is False
+    assert out["signals"]["has_jobs"] is False
+
+
+def test_ci_yaml_missing_test_step_fails_smoke_only() -> None:
+    spec = _ci_yaml_spec(**_full_ci_yaml_smoke())
+    out = check_ci_yaml(NO_TEST_STEP_CI_YAML, spec)
+    assert out["build_ok"] is True  # has on:/jobs:/runs-on:/steps with items
+    assert out["smoke_ok"] is False  # no install/test run steps
+    assert out["signals"]["steps_found"]["test"] is False
+    assert out["signals"]["steps_found"]["install"] is False
+
+
+def test_ci_yaml_trivial_token_parroting_is_spec_gaming() -> None:
+    spec = _ci_yaml_spec(**_full_ci_yaml_smoke())
+    out = check_ci_yaml(TRIVIAL_CI_YAML, spec)
+    assert out["signals"]["spec_gaming"] is True
+    # No real job body -> not buildable, no smoke.
+    assert out["build_ok"] is False
+    assert out["smoke_ok"] is False
+
+
+def test_ci_yaml_token_satisfying_parrot_still_spec_gaming() -> None:
+    # Regression: a parrot that satisfies every must_contain token via real bare
+    # keys (runs-on:/steps: are required tokens) but has no step items must still
+    # trip spec_gaming. (Keying on has_runs_on instead of step_count missed this.)
+    spec = _ci_yaml_spec(**_full_ci_yaml_smoke())
+    out = check_ci_yaml(TOKEN_SATISFYING_CI_PARROT, spec)
+    assert out["signals"]["missing_required"] == []  # all tokens present
+    assert out["signals"]["step_count"] == 0
+    assert out["signals"]["spec_gaming"] is True
+    assert out["build_ok"] is False
+    assert out["smoke_ok"] is False
+
+
+def test_ci_yaml_harness_roundtrips_and_matches_static() -> None:
+    spec = _ci_yaml_spec(**_full_ci_yaml_smoke())
+    src = build_python_harness(GOOD_CI_YAML, spec)
+    # stdlib-only, no leaked heavy imports.
+    assert "import json" in src
+    assert "import re" in src
+    for forbidden in ("import httpx", "import verifier", "import requests", "import os"):
+        assert forbidden not in src
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", src],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    parsed = parse_harness_output(proc.stdout)
+    assert parsed is not None
+    # Parity with the in-process ci-yaml check (same source of truth).
+    inproc = check_ci_yaml(GOOD_CI_YAML, spec)
     assert parsed["build_ok"] == inproc["build_ok"] is True
     assert parsed["smoke_ok"] == inproc["smoke_ok"] is True

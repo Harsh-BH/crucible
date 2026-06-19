@@ -52,6 +52,35 @@ TRIVIAL_COMPOSE = """\
 services:
 """
 
+GOOD_CI_YAML = """\
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest
+"""
+
+# Token-parroting CI-YAML: must_contain substrings present (in comments) but no
+# real job body underneath (no runs-on:, no steps list item) -> spec_gaming.
+TRIVIAL_CI_YAML = """\
+# jobs:
+# runs-on: ubuntu-latest
+# steps:
+# actions/checkout
+on: [push]
+jobs:
+"""
+
 
 def _spec(**smoke) -> VerifySpec:
     return VerifySpec(
@@ -77,6 +106,22 @@ def _full_compose_smoke() -> dict:
         port=8000,
         health_path="/health",
         dependency_service="postgres",
+    )
+
+
+def _ci_yaml_spec(**smoke) -> VerifySpec:
+    return VerifySpec(
+        spec_id="t-ci",
+        kind=ArtifactKind.CI_YAML,
+        smoke=smoke,
+        limits=ResourceLimits(wall_s=10, mem_mb=256),
+    )
+
+
+def _full_ci_yaml_smoke() -> dict:
+    return dict(
+        must_contain=["on:", "jobs:", "runs-on:", "steps:", "actions/checkout"],
+        required_steps=["checkout", "setup", "install", "test"],
     )
 
 
@@ -130,6 +175,28 @@ async def test_static_verifier_compose_spec_gaming_flag() -> None:
     assert res.hack_flags.spec_gaming is True
 
 
+# --- StaticVerifier: kind dispatch to ci-yaml ------------------------------
+async def test_static_verifier_ci_yaml_good() -> None:
+    # StaticVerifier.verify -> check_artifact -> check_ci_yaml for a CI_YAML spec.
+    v = StaticVerifier()
+    res = await v.verify(GOOD_CI_YAML, _ci_yaml_spec(**_full_ci_yaml_smoke()))
+    assert res.backend == "static"
+    assert res.build_ok is True
+    assert res.smoke_ok is True
+    assert res.exit_code == 0
+    assert res.hack_flags.spec_gaming is False
+    assert res.reward is None
+
+
+async def test_static_verifier_ci_yaml_spec_gaming_flag() -> None:
+    # A trivial token-parroting workflow trips hack_flags.spec_gaming.
+    v = StaticVerifier()
+    res = await v.verify(TRIVIAL_CI_YAML, _ci_yaml_spec(**_full_ci_yaml_smoke()))
+    assert res.build_ok is False
+    assert res.smoke_ok is False
+    assert res.hack_flags.spec_gaming is True
+
+
 # --- LocalPyVerifier (real subprocess) -------------------------------------
 async def test_local_py_matches_static() -> None:
     spec = _spec(must_contain=["FROM", "CMD"], base_image_prefix="python:3.12", port=8000)
@@ -156,6 +223,20 @@ async def test_local_py_compose_matches_static() -> None:
     spec = _compose_spec(**_full_compose_smoke())
     static_res = await StaticVerifier().verify(GOOD_COMPOSE, spec)
     py_res = await LocalPyVerifier().verify(GOOD_COMPOSE, spec)
+    assert py_res.backend == "local-py"
+    assert py_res.exit_code == 0
+    assert py_res.status == "ok"
+    assert py_res.build_ok == static_res.build_ok is True
+    assert py_res.smoke_ok == static_res.smoke_ok is True
+    assert py_res.reward is None
+
+
+async def test_local_py_ci_yaml_matches_static() -> None:
+    # CI_YAML harness inlines the ci-yaml check -> same (build_ok, smoke_ok) as
+    # the in-process static path (mirrors the compose + Dockerfile parity tests).
+    spec = _ci_yaml_spec(**_full_ci_yaml_smoke())
+    static_res = await StaticVerifier().verify(GOOD_CI_YAML, spec)
+    py_res = await LocalPyVerifier().verify(GOOD_CI_YAML, spec)
     assert py_res.backend == "local-py"
     assert py_res.exit_code == 0
     assert py_res.status == "ok"

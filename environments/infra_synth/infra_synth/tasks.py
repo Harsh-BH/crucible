@@ -113,6 +113,21 @@ COMPOSE_SYSTEM_PROMPT = (
     "service (using a pinned image) and reference it via `depends_on`.\n"
 )
 
+CI_YAML_SYSTEM_PROMPT = (
+    "You are an expert platform engineer. Given a CI specification, produce a "
+    "single, correct GitHub Actions workflow that satisfies it.\n\n"
+    "Output rules (strict):\n"
+    "- Respond with ONLY one GitHub Actions workflow YAML, wrapped in a single "
+    "```yaml fenced code block.\n"
+    "- Do NOT include any prose, explanation, commentary, or <think> blocks before "
+    "or after the block.\n"
+    "- Define an `on:` trigger and a top-level `jobs:` mapping with a job that "
+    "runs-on a runner and has a `steps:` list.\n"
+    "- The steps must: check out the code (`actions/checkout`), set up the "
+    "language (`actions/setup-...`), install dependencies, and run the test "
+    "suite (pytest).\n"
+)
+
 
 # ---------------------------------------------------------------------------
 # Grid enumeration + split
@@ -304,6 +319,65 @@ def _compose_info_for(
     }
 
 
+def _render_ci_yaml_question(combo: tuple[str, str, str, int, str]) -> str:
+    """Render a natural-language GitHub Actions CI spec for one parameter combo.
+
+    A CI workflow has no server to probe, so the port / health-path fields of the
+    combo are unused here (the grid is shared with the other kinds for split
+    parity); only language / framework drive the rendered flavor.
+    """
+    language, framework, _dependency, _port, _health = combo
+    lang_meta = LANGUAGES[language]
+    fw_meta = FRAMEWORKS[framework]
+    return (
+        f"Write a GitHub Actions workflow (.github/workflows/ci.yml) that runs CI "
+        f"for a {fw_meta['display']} {lang_meta['display']} project: trigger on "
+        f"push and pull_request, check out the code, set up "
+        f"{lang_meta['display']}, install dependencies from requirements.txt, and "
+        f"run the test suite (pytest)."
+    )
+
+
+def _ci_yaml_info_for(
+    combo: tuple[str, str, str, int, str], spec_id: str
+) -> dict[str, Any]:
+    """Build the ci-yaml ``info`` dict (the pipeline's source of truth) for a combo.
+
+    Mirrors :func:`_compose_info_for` but targets ``ArtifactKind.CI_YAML`` and the
+    ``check_ci_yaml`` smoke contract: ``must_contain`` (the case-sensitive
+    substring gate) and ``required_steps`` (the semantic steps detected via token
+    heuristics). A CI workflow has no server to probe, so there is intentionally
+    NO ``port`` / ``health_path`` in the smoke block.
+    """
+    language, framework, dependency, _port, _health = combo
+    fw_meta = FRAMEWORKS[framework]
+
+    return {
+        "spec_id": spec_id,
+        "kind": ArtifactKind.CI_YAML.value,  # "ci-yaml"
+        # Grid parameters (also used by gold.py to render a reference flavor).
+        "language": language,
+        "framework": framework,
+        "dependency": dependency,
+        "packages": list(fw_meta["packages"]),
+        "dep_packages": list(DEPENDENCIES[dependency]["packages"]),
+        "app_target": fw_meta["app_target"],
+        "server": fw_meta["server"],
+        # Smoke-test parameters consumed when constructing a VerifySpec. The
+        # locked ci-yaml contract: must_contain + required_steps, no port/health.
+        "smoke": {
+            "must_contain": [
+                "on:",
+                "jobs:",
+                "runs-on:",
+                "steps:",
+                "actions/checkout",
+            ],
+            "required_steps": ["checkout", "setup", "install", "test"],
+        },
+    }
+
+
 def _gold_hint(combo: tuple[str, str, str, int, str]) -> str:
     """Short 'answer' hint stored per task — the canonical base image tag."""
     language = combo[0]
@@ -328,17 +402,23 @@ def generate_tasks(
     does NOT change the split (it only changes the rendered artifact).
 
     ``kind`` selects the target artifact: ``"dockerfile"`` (the default — output
-    is byte-for-byte identical to the historical no-``kind`` behavior) or
+    is byte-for-byte identical to the historical no-``kind`` behavior),
     ``"compose"`` (a ``docker-compose.yml`` NL spec + the ``check_compose`` smoke
-    contract). The ``kind`` is folded into the ``spec_id`` for non-Dockerfile
-    kinds so Dockerfile and Compose task ids never collide.
+    contract), or ``"ci-yaml"`` (a GitHub Actions workflow NL spec + the
+    ``check_ci_yaml`` smoke contract). The ``kind`` is folded into the
+    ``spec_id`` for non-Dockerfile kinds so Dockerfile, Compose, and CI task ids
+    never collide.
 
     ``n`` caps the number of tasks (``None`` -> use the whole split pool). If
     ``n`` exceeds the pool size we return the whole pool (no duplication).
     """
-    if kind not in (ArtifactKind.DOCKERFILE.value, ArtifactKind.COMPOSE.value):
+    if kind not in (
+        ArtifactKind.DOCKERFILE.value,
+        ArtifactKind.COMPOSE.value,
+        ArtifactKind.CI_YAML.value,
+    ):
         raise ValueError(
-            f"unknown kind {kind!r} (expected 'dockerfile' or 'compose')"
+            f"unknown kind {kind!r} (expected 'dockerfile', 'compose', or 'ci-yaml')"
         )
 
     pool = _split_combos(split)
@@ -351,6 +431,7 @@ def generate_tasks(
         pool = pool[: max(0, n)]
 
     is_compose = kind == ArtifactKind.COMPOSE.value
+    is_ci_yaml = kind == ArtifactKind.CI_YAML.value
     tasks: list[dict[str, Any]] = []
     for i, combo in enumerate(pool):
         base_id = f"{split}-{seed}-{i:04d}-{combo[0]}-{combo[1]}-{combo[2]}-{combo[3]}"
@@ -358,6 +439,10 @@ def generate_tasks(
             spec_id = f"compose-{base_id}"
             question = _render_compose_question(combo)
             info = _compose_info_for(combo, spec_id)
+        elif is_ci_yaml:
+            spec_id = f"ci-{base_id}"
+            question = _render_ci_yaml_question(combo)
+            info = _ci_yaml_info_for(combo, spec_id)
         else:
             # Dockerfile path: unchanged spec_id / question / info (byte-for-byte).
             spec_id = base_id
@@ -423,6 +508,7 @@ def build_verify_spec(info: dict[str, Any]) -> VerifySpec:
 __all__ = [
     "SYSTEM_PROMPT",
     "COMPOSE_SYSTEM_PROMPT",
+    "CI_YAML_SYSTEM_PROMPT",
     "TASK_NAME",
     "LANGUAGES",
     "FRAMEWORKS",

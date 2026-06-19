@@ -38,6 +38,16 @@ _DEP_SERVICE_IMAGE: dict[str, str] = {
     "redis": "redis:7",
 }
 
+# Per-language ``actions/setup-*`` step for a GitHub Actions workflow (the token
+# ``check_ci_yaml`` keys the ``setup`` step off of -> ``actions/setup-``).
+_CI_SETUP: dict[str, dict[str, str]] = {
+    "python": {
+        "action": "actions/setup-python@v5",
+        "version_key": "python-version",
+        "version": "3.11",
+    },
+}
+
 
 def _server_cmd(server: str, app_target: str, port: int) -> str:
     """Return a JSON-array CMD line launching ``server`` on ``port``."""
@@ -169,4 +179,46 @@ def gold_compose(info: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["gold_dockerfile", "gold_compose"]
+def gold_ci_yaml(info: dict[str, Any]) -> str:
+    """Render a correct reference GitHub Actions workflow for ``info``.
+
+    Expects the ci-yaml ``info`` shape produced by
+    :func:`infra_synth.tasks._ci_yaml_info_for` (keys: ``language`` /
+    ``framework`` for flavor; the structure is what matters). The document
+    intentionally satisfies :func:`verifier.smoke.checks.check_ci_yaml`:
+
+    - a top-level ``on:`` trigger (push + pull_request),
+    - a top-level ``jobs:`` mapping with >= 1 job that declares ``runs-on:``,
+    - a ``steps:`` list with the four semantic steps the check detects via token
+      heuristics: ``actions/checkout`` (checkout), ``actions/setup-<lang>``
+      (setup), a ``run:`` mentioning ``install`` (install), and a ``run:``
+      mentioning ``pytest`` (test).
+
+    The output contains every ``smoke['must_contain']`` substring (``on:`` /
+    ``jobs:`` / ``runs-on:`` / ``steps:`` / ``actions/checkout``) and a real job
+    body (so it is not flagged ``spec_gaming``).
+    """
+    language = info.get("language", "python")
+    setup = _CI_SETUP.get(language, _CI_SETUP["python"])
+
+    lines: list[str] = []
+    lines.append("name: ci")
+    lines.append("on:")
+    lines.append("  push:")
+    lines.append('    branches: ["main"]')
+    lines.append("  pull_request:")
+    lines.append("jobs:")
+    lines.append("  test:")
+    lines.append("    runs-on: ubuntu-latest")
+    lines.append("    steps:")
+    lines.append("      - uses: actions/checkout@v4")
+    lines.append(f"      - uses: {setup['action']}")
+    lines.append("        with:")
+    lines.append(f'          {setup["version_key"]}: "{setup["version"]}"')
+    lines.append("      - run: pip install -r requirements.txt")
+    lines.append("      - run: pytest")
+
+    return "\n".join(lines) + "\n"
+
+
+__all__ = ["gold_dockerfile", "gold_compose", "gold_ci_yaml"]

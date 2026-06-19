@@ -22,9 +22,10 @@ PUBLIC API
                                  binary=False) -> float`` and
                                  ``result_to_metrics(result)``.
 - ``verifier.smoke.checks``    : ``check_dockerfile`` / ``check_compose`` /
-                                 ``check_artifact`` (kind dispatch) /
-                                 ``build_python_harness`` / ``parse_harness_output``
-                                 (stdlib-only check logic shared by every backend).
+                                 ``check_ci_yaml`` / ``check_artifact`` (kind
+                                 dispatch) / ``build_python_harness`` /
+                                 ``parse_harness_output`` (stdlib-only check
+                                 logic shared by every backend).
 
 This package stays importable with only ``httpx`` + stdlib (no
 ``verifiers``/``torch``/``vllm``/``datasets``).
@@ -53,6 +54,7 @@ from .sentinel_client import SentinelClient, SentinelVerifier
 from .smoke.checks import (
     build_python_harness,
     check_artifact,
+    check_ci_yaml,
     check_compose,
     check_dockerfile,
     parse_harness_output,
@@ -87,6 +89,7 @@ __all__ = [
     # smoke check helpers
     "check_dockerfile",
     "check_compose",
+    "check_ci_yaml",
     "check_artifact",
     "build_python_harness",
     "parse_harness_output",

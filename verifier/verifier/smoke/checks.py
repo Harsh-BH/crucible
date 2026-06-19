@@ -31,18 +31,20 @@ last line upward for the first line that ``json.loads`` into a ``dict`` carrying
 the ``build_ok`` key. This makes the contract robust to leading/trailing noise.
 
 NOTE: This is a *static* heuristic stand-in. ``check_dockerfile`` /
-``check_compose`` never build a real image or make a network request; they parse
-the artifact text and apply documented heuristics. The genuine build+probe lives
-in :class:`verifier.backends.LocalDockerVerifier`.
+``check_compose`` / ``check_ci_yaml`` never build a real image, run a workflow, or
+make a network request; they parse the artifact text and apply documented
+heuristics. The genuine build+probe lives in
+:class:`verifier.backends.LocalDockerVerifier`.
 
 Kind dispatch
 -------------
 The static path is :class:`ArtifactKind`-aware. :func:`check_artifact` routes by
 ``spec.kind`` (``DOCKERFILE`` -> :func:`check_dockerfile`, ``COMPOSE`` ->
-:func:`check_compose`, default -> Dockerfile to preserve historical behavior),
-and :func:`build_python_harness` inlines the *right* check body for the kind via
-a small registry. Each kind contributes a stdlib-only ``_run_*_checks`` body that
-takes already-extracted params (never a ``VerifySpec``) so it string-inlines.
+:func:`check_compose`, ``CI_YAML`` -> :func:`check_ci_yaml`, default -> Dockerfile
+to preserve historical behavior), and :func:`build_python_harness` inlines the
+*right* check body for the kind via a small registry. Each kind contributes a
+stdlib-only ``_run_*_checks`` body that takes already-extracted params (never a
+``VerifySpec``) so it string-inlines.
 """
 from __future__ import annotations
 
@@ -56,6 +58,7 @@ if TYPE_CHECKING:  # avoid importing types at the source-string level
 __all__ = [
     "check_dockerfile",
     "check_compose",
+    "check_ci_yaml",
     "check_artifact",
     "build_python_harness",
     "parse_harness_output",
@@ -629,13 +632,282 @@ def check_compose(artifact: str, spec: VerifySpec) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# GitHub Actions CI-YAML check logic (kind == CI_YAML).
+#
+# Mirrors the compose path: a documented stand-in that does NOT run ``act`` (or
+# the workflow) and does NOT import PyYAML -- it parses the workflow document with
+# indentation/substring/regex heuristics so it string-inlines into the
+# self-contained harness exactly like ``_run_compose_checks``. Depends only on
+# ``re`` + plain types and takes already-extracted params (not a VerifySpec).
+# ---------------------------------------------------------------------------
+
+# Semantic CI steps a real workflow performs, each detected by token heuristics.
+# Default ``required_steps`` for the smoke decision (overridable via spec.smoke).
+_CI_DEFAULT_REQUIRED_STEPS = ("checkout", "setup", "install", "test")
+
+
+def _blocks_under(text: str, key: str) -> list[str]:
+    """Return the raw text of each block nested under top-level ``<key>:``.
+
+    Generalizes :func:`_service_blocks` (which is hard-wired to ``services:``) to
+    any top-level mapping key: find the ``<key>:`` line, then collect every line
+    more indented than it until indentation returns to <= the ``<key>:`` indent.
+    Within that region, a child key (the *first* indentation level under
+    ``<key>:``) opens a new block; deeper lines belong to the current block.
+    Returns one text chunk per child (the child key line + its body). Used by the
+    ci-yaml path to count job blocks under ``jobs:``.
+    """
+    lines = text.splitlines()
+    head_idx = -1
+    head_indent = 0
+    pat = re.compile(rf"^{re.escape(key)}\s*:")
+    for i, raw in enumerate(lines):
+        if raw and raw[0] not in (" ", "\t", "#") and pat.match(raw):
+            head_idx = i
+            head_indent = len(raw) - len(raw.lstrip(" "))
+            break
+    if head_idx < 0:
+        return []
+
+    child_indent: int | None = None
+    blocks: list[str] = []
+    cur: list[str] = []
+    for raw in lines[head_idx + 1 :]:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            if cur:  # keep blanks/comments inside an open block (harmless)
+                cur.append(raw)
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent <= head_indent:  # dedented back out of the section
+            break
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent:  # a new child key opens a block
+            if cur:
+                blocks.append("\n".join(cur))
+            cur = [raw]
+        else:  # deeper -> body of the current block
+            cur.append(raw)
+    if cur:
+        blocks.append("\n".join(cur))
+    return blocks
+
+
+def _step_items(text: str) -> list[str]:
+    """Return the raw text of each ``- `` list item nested under a ``steps:`` key.
+
+    Heuristic: find every top-of-block ``steps:`` line, then collect the list
+    items (lines whose first non-space character is ``-``) more indented than it,
+    until indentation returns to <= the ``steps:`` indent. One string per step
+    (the ``- `` line; sibling deeper lines are folded onto it so ``uses:``/``run:``
+    on continuation lines stay attached). Good enough to count steps.
+    """
+    lines = text.splitlines()
+    items: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        raw = lines[i]
+        stripped = raw.strip()
+        if stripped and not stripped.startswith("#") and re.match(r"^steps\s*:", stripped):
+            steps_indent = len(raw) - len(raw.lstrip(" "))
+            cur: list[str] = []
+            j = i + 1
+            while j < n:
+                ln = lines[j]
+                if not ln.strip() or ln.lstrip().startswith("#"):
+                    if cur:
+                        cur.append(ln)
+                    j += 1
+                    continue
+                indent = len(ln) - len(ln.lstrip(" "))
+                if indent <= steps_indent:  # dedented back out of steps:
+                    break
+                if ln.lstrip().startswith("-"):  # a new list item opens a step
+                    if cur:
+                        items.append("\n".join(cur))
+                    cur = [ln]
+                elif cur:  # body of the current step
+                    cur.append(ln)
+                j += 1
+            if cur:
+                items.append("\n".join(cur))
+            i = j
+            continue
+        i += 1
+    return items
+
+
+def _run_ci_yaml_checks(
+    artifact: str,
+    *,
+    must_contain: list[str],
+    required_steps: list[str],
+) -> dict[str, Any]:
+    """Core deterministic GitHub Actions workflow analysis (stdlib-only).
+
+    Returns ``{"build_ok", "smoke_ok", "signals", "reasons"}`` (the same contract
+    as :func:`_run_compose_checks`). A documented heuristic stand-in -- it does
+    NOT run ``act`` / the workflow; it parses the document by
+    indentation/substring/regex. This is the body inlined into the harness for
+    ``ArtifactKind.CI_YAML``.
+
+    Heuristics:
+      * ``build_ok`` -- a top-level trigger key ``on:`` (also the quoted
+        ``"on":``/``'on':`` forms YAML uses to avoid the boolean) exists; a
+        top-level ``jobs:`` key has >= 1 indented job block; at least one job
+        declares ``runs-on:``; a ``steps:`` key has >= 1 ``- `` list item; and all
+        ``must_contain`` substrings are present (case-sensitive).
+      * ``smoke_ok`` -- ``build_ok`` AND the workflow performs every step in
+        ``required_steps`` (semantic steps a real CI does), each detected by
+        token heuristics: ``checkout`` -> ``actions/checkout``; ``setup`` ->
+        ``actions/setup-`` (e.g. setup-python); ``install`` -> a ``run:`` step
+        mentioning ``install``; ``test`` -> a ``run:`` step mentioning ``pytest``
+        or ``test``.
+      * ``signals.spec_gaming`` -- the artifact ticks every ``must_contain`` token
+        yet has NO real job body (no ``runs-on:`` AND no real ``steps:`` list
+        item): the trivial token-parroting cheat (mirrors the compose intent).
+    """
+    reasons: list[str] = []
+    text = artifact or ""
+    top_keys = _top_level_keys(text)
+
+    # --- trigger key ``on:`` (bare or quoted "on"/'on') -------------------
+    has_on = "on" in top_keys or '"on"' in top_keys or "'on'" in top_keys
+
+    # --- ``jobs:`` with >= 1 indented job block ---------------------------
+    has_jobs = "jobs" in top_keys
+    job_blocks = _blocks_under(text, "jobs")
+    job_count = len(job_blocks)
+
+    # --- at least one job declares ``runs-on:`` ---------------------------
+    has_runs_on = bool(re.search(r"(^|\n)\s*runs-on\s*:", text))
+
+    # --- ``steps:`` with >= 1 ``- `` list item ----------------------------
+    has_steps_key = bool(re.search(r"(^|\n)\s*steps\s*:", text))
+    steps = _step_items(text)
+    step_count = len(steps)
+
+    # --- must_contain ------------------------------------------------------
+    missing_required: list[str] = []
+    for token in must_contain or []:
+        if token not in text:  # case-sensitive substring match
+            missing_required.append(token)
+    if missing_required:
+        reasons.append(f"missing required tokens: {missing_required}")
+
+    # --- build_ok decision -------------------------------------------------
+    if not has_on:
+        reasons.append("no top-level trigger key 'on:' (or quoted \"on\":/'on':)")
+    if not has_jobs:
+        reasons.append("no top-level 'jobs:' key")
+    elif job_count == 0:
+        reasons.append("'jobs:' present but defines no indented job block")
+    if not has_runs_on:
+        reasons.append("no job declares 'runs-on:'")
+    if not has_steps_key:
+        reasons.append("no 'steps:' key")
+    elif step_count == 0:
+        reasons.append("'steps:' present but defines no '- ' list item")
+
+    build_ok = bool(
+        has_on
+        and has_jobs
+        and job_count > 0
+        and has_runs_on
+        and has_steps_key
+        and step_count > 0
+        and not missing_required
+    )
+
+    # --- smoke_ok decision (semantic steps a real CI performs) ------------
+    has_checkout = "actions/checkout" in text
+    has_setup = bool(re.search(r"actions/setup-", text) or re.search(r"uses\s*:\s*\S*setup", text))
+    has_install = bool(re.search(r"run\s*:[^\n]*install", text))
+    has_test = bool(re.search(r"run\s*:[^\n]*(pytest|test)", text))
+    steps_found = {
+        "checkout": has_checkout,
+        "setup": has_setup,
+        "install": has_install,
+        "test": has_test,
+    }
+    required = list(required_steps) if required_steps else list(_CI_DEFAULT_REQUIRED_STEPS)
+    missing_steps = [s for s in required if not steps_found.get(s, False)]
+    if missing_steps:
+        reasons.append(f"missing required steps: {missing_steps}")
+
+    smoke_ok = bool(build_ok and not missing_steps)
+
+    # --- spec-gaming detection --------------------------------------------
+    # Ticks every must_contain token but has no real step list items: the
+    # trivial token-parroting cheat (mirrors the compose spec_gaming intent).
+    # NOTE: we key on step_count, NOT has_runs_on -- `runs-on:`/`steps:` are
+    # themselves must_contain tokens, so a parrot satisfies them by definition;
+    # only an actual step body (`- uses:`/`- run:` items) distinguishes real work.
+    has_real_job = step_count > 0
+    satisfies_tokens = bool(must_contain) and not missing_required
+    spec_gaming = bool(satisfies_tokens and not has_real_job)
+    if spec_gaming:
+        reasons.append(
+            "spec_gaming: ticks must_contain without a real job "
+            "(no real steps list items)"
+        )
+
+    signals: dict[str, Any] = {
+        "has_on": has_on,
+        "has_jobs": has_jobs,
+        "job_count": job_count,
+        "has_runs_on": has_runs_on,
+        "step_count": step_count,
+        "steps_found": steps_found,
+        "missing_required": missing_required,
+        "spec_gaming": spec_gaming,
+    }
+    return {
+        "build_ok": build_ok,
+        "smoke_ok": smoke_ok,
+        "signals": signals,
+        "reasons": reasons,
+    }
+
+
+def _ci_yaml_smoke_params(spec: VerifySpec) -> dict[str, Any]:
+    """Extract the ci-yaml harness params from a VerifySpec's ``smoke`` dict."""
+    smoke = spec.smoke or {}
+    required_steps = smoke.get("required_steps")
+    if required_steps:
+        required_steps = list(required_steps)
+    else:
+        required_steps = list(_CI_DEFAULT_REQUIRED_STEPS)
+    return {
+        "must_contain": list(smoke.get("must_contain", []) or []),
+        "required_steps": required_steps,
+    }
+
+
+def check_ci_yaml(artifact: str, spec: VerifySpec) -> dict[str, Any]:
+    """Statically analyze a GitHub Actions CI-YAML workflow against ``spec``.
+
+    Returns ``{"build_ok": bool, "smoke_ok": bool, "signals": {...},
+    "reasons": [...]}`` -- the same shape as :func:`check_dockerfile` /
+    :func:`check_compose`. A deterministic heuristic (no real ``act`` run); see
+    :func:`_run_ci_yaml_checks` for the documented heuristics. Reads
+    ``spec.smoke`` keys ``must_contain`` (list[str]) and ``required_steps``
+    (list[str], default ``["checkout","setup","install","test"]``).
+    """
+    params = _ci_yaml_smoke_params(spec)
+    return _run_ci_yaml_checks(artifact, **params)
+
+
+# ---------------------------------------------------------------------------
 # Kind dispatch (in-process static path).
 # ---------------------------------------------------------------------------
 def check_artifact(artifact: str, spec: VerifySpec) -> dict[str, Any]:
     """Statically analyze ``artifact`` by ``spec.kind``.
 
-    Routes ``ArtifactKind.DOCKERFILE`` -> :func:`check_dockerfile` and
-    ``ArtifactKind.COMPOSE`` -> :func:`check_compose`. Any other kind falls back
+    Routes ``ArtifactKind.DOCKERFILE`` -> :func:`check_dockerfile`,
+    ``ArtifactKind.COMPOSE`` -> :func:`check_compose`, and
+    ``ArtifactKind.CI_YAML`` -> :func:`check_ci_yaml`. Any other kind falls back
     to the Dockerfile path, preserving the historical behavior for kinds that
     reach the static path today. Returns the common
     ``{"build_ok","smoke_ok","signals","reasons"}`` shape.
@@ -644,6 +916,8 @@ def check_artifact(artifact: str, spec: VerifySpec) -> dict[str, Any]:
 
     if spec.kind == ArtifactKind.COMPOSE:
         return check_compose(artifact, spec)
+    if spec.kind == ArtifactKind.CI_YAML:
+        return check_ci_yaml(artifact, spec)
     return check_dockerfile(artifact, spec)
 
 
@@ -688,6 +962,19 @@ _COMPOSE_MAIN_BODY = '''\
             dependency_service={dependency_service!r},
         )'''
 
+_CI_YAML_MAIN_BODY = '''\
+        _ARTIFACT = {artifact!r}
+        result = _run_ci_yaml_checks(
+            _ARTIFACT,
+            must_contain={must_contain!r},
+            required_steps={required_steps!r},
+        )'''
+
+# Constant the ci-yaml check closes over (inlined only for that kind).
+_CI_YAML_CONST_SOURCE = (
+    "_CI_DEFAULT_REQUIRED_STEPS = " + repr(_CI_DEFAULT_REQUIRED_STEPS) + "\n"
+)
+
 
 class _HarnessKind:
     """One entry in the harness registry: how to inline & call a kind's check."""
@@ -718,6 +1005,12 @@ def _harness_registry() -> dict[str, _HarnessKind]:
             const_source="",
             smoke_params=_compose_smoke_params,
             main_body=_COMPOSE_MAIN_BODY,
+        ),
+        ArtifactKind.CI_YAML.value: _HarnessKind(
+            funcs=(_top_level_keys, _blocks_under, _step_items, _run_ci_yaml_checks),
+            const_source=_CI_YAML_CONST_SOURCE,
+            smoke_params=_ci_yaml_smoke_params,
+            main_body=_CI_YAML_MAIN_BODY,
         ),
     }
 
@@ -773,9 +1066,10 @@ def build_python_harness(artifact: str, spec: VerifySpec) -> str:
     :class:`SentinelVerifier` submits to the hardened sandbox.
 
     Dispatches on ``spec.kind`` via the harness registry: ``DOCKERFILE`` inlines
-    the Dockerfile heuristics (unchanged), ``COMPOSE`` inlines the compose ones.
-    Any other kind falls back to the Dockerfile path (matching
-    :func:`check_artifact`). Use :func:`parse_harness_output` to recover the JSON.
+    the Dockerfile heuristics (unchanged), ``COMPOSE`` inlines the compose ones,
+    ``CI_YAML`` inlines the GitHub Actions workflow ones. Any other kind falls
+    back to the Dockerfile path (matching :func:`check_artifact`). Use
+    :func:`parse_harness_output` to recover the JSON.
     """
     from verifier.types import ArtifactKind
 

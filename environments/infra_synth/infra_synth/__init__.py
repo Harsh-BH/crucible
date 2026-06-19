@@ -12,11 +12,17 @@ from __future__ import annotations
 
 from . import gold, impossible, parser, scaffold, tasks
 from .environment import load_environment
-from .gold import gold_compose, gold_dockerfile
+from .gold import gold_ci_yaml, gold_compose, gold_dockerfile
 from .impossible import MUTATIONS, Adversary, adversarial_corpus, impossible_tasks
-from .parser import extract_compose, extract_dockerfile
+from .parser import extract_ci_yaml, extract_compose, extract_dockerfile
 from .scaffold import app_scaffold
-from .tasks import COMPOSE_SYSTEM_PROMPT, SYSTEM_PROMPT, build_verify_spec, generate_tasks
+from .tasks import (
+    CI_YAML_SYSTEM_PROMPT,
+    COMPOSE_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_verify_spec,
+    generate_tasks,
+)
 
 __all__ = [
     "load_environment",
@@ -29,8 +35,10 @@ __all__ = [
     "build_verify_spec",
     "gold_dockerfile",
     "gold_compose",
+    "gold_ci_yaml",
     "extract_dockerfile",
     "extract_compose",
+    "extract_ci_yaml",
     "app_scaffold",
     "impossible_tasks",
     "adversarial_corpus",
@@ -38,4 +46,5 @@ __all__ = [
     "MUTATIONS",
     "SYSTEM_PROMPT",
     "COMPOSE_SYSTEM_PROMPT",
+    "CI_YAML_SYSTEM_PROMPT",
 ]
