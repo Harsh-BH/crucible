@@ -78,3 +78,6 @@ logs/
 # Claude Code — local/personal only (settings.json, agents/, commands/, hooks/, CLAUDE.md ARE committed)
 .claude/settings.local.json
 **/CLAUDE.local.md
+
+# Prime Intellect Hub push metadata (regenerated per push)
+.prime/

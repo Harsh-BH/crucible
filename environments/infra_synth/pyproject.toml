@@ -8,8 +8,14 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "verifiers>=0.1.14",
     "datasets",
-    "crucible-verifier",
+    "httpx>=0.27",  # the bundled `verifier` package needs it (was transitive via crucible-verifier)
 ]
+# NOTE: `crucible-verifier` is intentionally NOT a dependency. It is not on PyPI
+# (it is a sibling workspace dist), so a Hub install could not resolve it. Instead
+# the published wheel BUNDLES the `verifier` package (force-include below), making
+# the environment self-contained: `import verifier` resolves from this wheel alone.
+# In the dev workspace the editable `crucible-verifier` member still provides
+# `verifier` (pulled in by the root `crucible` package), so local dev is unchanged.
 
 [build-system]
 requires = ["hatchling"]
@@ -20,6 +26,10 @@ packages = ["infra_synth"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "pyproject.toml" = "infra_synth/pyproject.toml"
+# Vendor the verifier package into the wheel as the top-level `verifier` package
+# (keeps the frozen `from verifier.types import ...` imports working) so the Hub
+# env installs with no external `crucible-verifier` dependency.
+"../../verifier/verifier" = "verifier"
 
 [tool.verifiers.eval]
 num_examples = 10
