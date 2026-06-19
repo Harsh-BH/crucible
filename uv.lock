@@ -1547,7 +1547,7 @@ wheels = [
 
 [[package]]
 name = "infra-synth"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "environments/infra_synth" }
 dependencies = [
     { name = "crucible-verifier" },

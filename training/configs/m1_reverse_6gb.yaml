@@ -1,0 +1,29 @@
+# Loop-sanity (TOY) GRPO run sized for a 6 GB laptop GPU (RTX 3050).
+# NOT the real M1 result — that needs ~24-40 GB (Qwen3-1.7B). This proves the
+# TRL GRPO loop executes on a tiny GPU and the reward moves on the simplest,
+# download-free task (reverse_text). Run from the repo root:
+#   PYTHONPATH=. .venv-train/bin/python -m training.run --config training/configs/m1_reverse_6gb.yaml
+env: reverse_text
+model: Qwen/Qwen2.5-0.5B-Instruct   # smallest practical instruct LM that fits 6 GB
+lora: true
+lora_rank: 8
+lora_alpha: 16
+num_generations: 4                  # small group => less KV-cache VRAM
+per_device_train_batch_size: 4      # must be divisible by num_generations (4/4 = 1 prompt/microstep)
+gradient_accumulation_steps: 2
+max_completion_length: 64           # reverse_text answers are short
+max_steps: 30
+lr: 1.0e-5
+beta: 0.0
+temperature: 1.0
+top_p: 1.0
+dataset_size: 128
+logging_steps: 1
+seed: 0
+output_dir: outputs/m1_reverse_6gb
+# --- below are NOT RunConfig fields: they fall through to GRPOConfig via
+#     extra_grpo. These are the 6 GB memory levers. ---
+bf16: true                          # mixed-precision training
+gradient_checkpointing: true        # trade compute for activation memory
+model_init_kwargs:
+  torch_dtype: bfloat16             # load the base model in bf16 (halves weight VRAM)

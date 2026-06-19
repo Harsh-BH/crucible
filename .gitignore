@@ -81,3 +81,7 @@ logs/
 
 # Prime Intellect Hub push metadata (regenerated per push)
 .prime/
+
+# local GPU training venv (not committed)
+.venv-train/
+outputs/

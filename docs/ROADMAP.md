@@ -76,8 +76,18 @@
   genuinely via `verifier_backend="local"`. Each backend degrades gracefully to
   an "unavailable" result when its CLI is absent (so CI stays green).
 
+**Partially exercised:**
+- **GRPO loop ran on a real (small) GPU.** On a 6 GB RTX 3050 Laptop GPU
+  (`training/configs/m1_reverse_6gb.yaml`): TRL GRPO with **Qwen2.5-0.5B + LoRA +
+  bf16 + gradient-checkpointing** (HF-generate, no vLLM) trains without OOM. On
+  gsm8k (40 steps, group=4, single seed) the **smoothed reward trended up
+  0.525→0.662** (gsm8k correctness 0.21→0.30) at ~10.5 s/step, peak 5.4/6 GB.
+  This proves the loop + reward signal on real GPU hardware — it is NOT the full
+  M1 below (noisy, single seed, 0.5B, 40 steps).
+
 **Scaffolded but NOT yet executed (need real infra):**
-- A real GPU GRPO run (M1 "reward rises, ≥3 seeds").
+- The full M1 GRPO run — **reward rises, stable across ≥3 seeds** on Qwen3-1.7B
+  (needs ~24–40 GB; the 6 GB run above only exercises the loop on a 0.5B toy).
 - Throughput/parity against a *live* Sentinel (M2 numbers).
 - Real C3 cheating-rate figures: run `eval.c3_study` against a live Sentinel (NS-4).
 
