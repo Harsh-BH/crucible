@@ -31,6 +31,13 @@ _APT_FOR_DEP: dict[str, tuple[str, ...]] = {
     "none": (),
 }
 
+# Pinned image for each dependency service in a compose document (no floating
+# ``latest``). ``none`` maps to no separate service (see :func:`gold_compose`).
+_DEP_SERVICE_IMAGE: dict[str, str] = {
+    "postgres": "postgres:16",
+    "redis": "redis:7",
+}
+
 
 def _server_cmd(server: str, app_target: str, port: int) -> str:
     """Return a JSON-array CMD line launching ``server`` on ``port``."""
@@ -110,4 +117,56 @@ def gold_dockerfile(info: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["gold_dockerfile"]
+def gold_compose(info: dict[str, Any]) -> str:
+    """Render a correct reference ``docker-compose.yml`` for ``info``.
+
+    Expects the compose ``info`` shape produced by
+    :func:`infra_synth.tasks._compose_info_for` (keys: ``dependency`` and
+    ``smoke`` with ``port`` / ``health_path`` / ``dependency_service``). The
+    document intentionally satisfies :func:`verifier.smoke.checks.check_compose`:
+
+    - a top-level ``services:`` key with a real ``web`` service (``build: .``),
+    - a ``ports:`` mapping publishing ``"<P>:<P>"``,
+    - a ``healthcheck:`` block whose ``test`` curls ``http://localhost:<P><H>``,
+    - and (when ``dependency != none``) a separate ``postgres``/``redis`` service
+      plus a ``depends_on`` reference.
+
+    The output contains every ``smoke['must_contain']`` substring
+    (``services:`` / ``ports:`` / ``"<P>:<P>"`` / ``healthcheck:``) and a real
+    ``build:``/``image:`` (so it is not flagged ``spec_gaming``).
+    """
+    smoke = info.get("smoke", {})
+    port = int(smoke.get("port", 8000))
+    health = smoke.get("health_path", "/health")
+    dependency = info.get("dependency", "none")
+    dep_service = smoke.get("dependency_service")
+    if dep_service is None and dependency != "none":
+        dep_service = dependency
+
+    lines: list[str] = []
+    lines.append("services:")
+    lines.append("  web:")
+    lines.append("    build: .")
+    lines.append("    ports:")
+    lines.append(f'      - "{port}:{port}"')
+    lines.append("    healthcheck:")
+    lines.append(
+        f'      test: ["CMD", "curl", "-f", "http://localhost:{port}{health}"]'
+    )
+    lines.append("      interval: 10s")
+    lines.append("      timeout: 3s")
+    lines.append("      retries: 3")
+    if dep_service:
+        lines.append("    depends_on:")
+        lines.append(f"      - {dep_service}")
+    lines.append("    restart: unless-stopped")
+    if dep_service:
+        image = _DEP_SERVICE_IMAGE.get(dep_service, f"{dep_service}:latest")
+        lines.append(f"  {dep_service}:")
+        lines.append(f"    image: {image}")
+        lines.append("    restart: unless-stopped")
+
+    return "\n".join(lines) + "\n"
+
+
+__all__ = ["gold_dockerfile", "gold_compose"]

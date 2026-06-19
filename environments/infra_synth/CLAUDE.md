@@ -12,11 +12,28 @@ spec `pyproject.toml` sits one level up. Depends on `crucible-verifier`.
 - `infra_synth/tasks.py` — seeded task generation over a parameter grid
   (language × framework × dependency × port × health-path); `generate_tasks()`
   and `build_verify_spec(info)`. Train/test draw **disjoint** combos
-  (seed-independent FNV-1a hash) for contamination resistance.
+  (seed-independent FNV-1a hash) for contamination resistance. A second
+  `ArtifactKind` is wired end-to-end through the static path: pass
+  `artifact_kind="compose"` to `load_environment` (or `kind="compose"` to
+  `generate_tasks`) to emit/grade a `docker-compose.yml` instead of a Dockerfile
+  (graded by `check_compose`); `"dockerfile"` stays the default.
 - `infra_synth/parser.py` — `extract_dockerfile()` pulls the last fenced
-  ```dockerfile block from a completion.
+  ```dockerfile block from a completion; `extract_compose()` pulls the last
+  ```yaml/```yml/```compose block (Docker Compose support).
 - `infra_synth/gold.py` — `gold_dockerfile(info)` renders a correct reference
-  (eval references + the gold-passes-its-own-spec test).
+  (eval references + the gold-passes-its-own-spec test); `gold_compose(info)`
+  renders a correct reference `docker-compose.yml` that passes `check_compose`.
+- `infra_synth/scaffold.py` — `app_scaffold(info)` returns the build-context
+  files a realistic Dockerfile `COPY`s (`requirements.txt` + a minimal
+  FastAPI/Flask `app` serving the task's health path). `build_verify_spec`
+  attaches it as `smoke["context_files"]`; `LocalDockerVerifier` writes it into
+  the build context for genuine build+smoke.
+- `infra_synth/impossible.py` — C3 ImpossibleBench-style generator
+  (`impossible_tasks` + `MUTATIONS`: spec mutations no faithful Dockerfile, gold
+  included, can pass — all `weak_tests`) plus `adversarial_corpus`
+  (category-tagged, safe `PYTHON`-kind grader-subversion artifacts for the
+  weak-vs-hardened study; dangerous `fork_bomb` excluded by default). Stdlib +
+  `verifier.types` only; does NOT import `analysis/`.
 
 ## Hub spec
 
@@ -30,9 +47,12 @@ uv run vf-install infra-synth
 uv run vf-eval infra-synth -a '{"verifier_backend":"static"}'
 ```
 
-## Note (NS-2 / M3)
+## Note (NS-2 — done)
 
-`load_environment` and the env helpers are built; the genuine `local-docker`
-build needs a per-task **app scaffold** (`requirements.txt` + a minimal server
-exposing `/health`) written into the build context. `VerifySpec.smoke` already
-accommodates `context_files`, so this is non-breaking. See NS-2 in `docs/ROADMAP.md`.
+NS-2 is complete: the per-task **app scaffold** (`scaffold.py`) ships
+`requirements.txt` + a minimal FastAPI/Flask `app` (serving the task's health
+path) into the build context via `smoke["context_files"]`, and
+`LocalDockerVerifier` writes those files before building. Verified end-to-end
+under a real Docker daemon — gold Dockerfile **builds + serves health → HTTP
+200** for both frameworks. Non-breaking (the frozen `VerifySpec.smoke` dict
+already accommodated `context_files`). M3 next: a measurable, ablated model gain.

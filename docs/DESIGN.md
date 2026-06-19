@@ -87,26 +87,29 @@ Both `eval/parity.py` and `eval/throughput.py` accept an injectable `httpx`
 transport, so they run in CI against an `httpx.MockTransport` *and* against a
 live Sentinel by URL with the same code.
 
-**The genuine verifier is `local-docker`, and it is currently shallow.** The
-static/harness path is a *heuristic stand-in*: it parses the Dockerfile and
-checks for a pinned `FROM`, required tokens, an `EXPOSE`d port, and a
-server-launching `CMD`. It never builds an image. `local-docker` does the real
-thing — build, run, poll `http://localhost:<port><health_path>` for a 200 — but
-today it only writes the model's Dockerfile into an otherwise **empty build
-context**, so any realistic FastAPI/Flask spec (which `COPY ./app` and installs
-`requirements.txt`) cannot actually serve.
+**The genuine verifier is `local-docker`.** The static/harness path is a
+*heuristic stand-in*: it parses the Dockerfile and checks for a pinned `FROM`,
+required tokens, an `EXPOSE`d port, and a server-launching `CMD`. It never builds
+an image. `local-docker` does the real thing — build, run, poll
+`http://localhost:<port><health_path>` for a 200. As of NS-2 it builds against a
+**real app scaffold** written into the context (below), so realistic
+FastAPI/Flask specs (which `COPY ./app` and install `requirements.txt`) actually
+build and serve.
 
-### Concrete next step: app scaffold in the build context
+### App scaffold in the build context (NS-2 — built)
 
-To make `local-docker` genuine for realistic specs, ship a small **app scaffold**
+`local-docker` is genuine for realistic specs because a small **app scaffold**
 (a minimal but real FastAPI/Flask app exposing the requested `health_path`, plus
-a `requirements.txt`) into the Docker build context alongside the model's
-Dockerfile. The build then exercises the model's dependency install / `COPY` /
+a `requirements.txt`) is shipped into the Docker build context alongside the
+model's Dockerfile. The build exercises the model's dependency install / `COPY` /
 `CMD`, and the smoke probe genuinely hits a live server. This is **non-breaking**:
-`VerifySpec.smoke` is a free-form `dict` and already accommodates a
-`context_files` mapping, so the environment can attach scaffold files without any
-change to the frozen contract. (Status: **WIP** — the contract is ready; the
-scaffold templates and `LocalDockerVerifier` context wiring are not yet built.)
+`VerifySpec.smoke` is a free-form `dict` and accommodates a `context_files`
+mapping, so the environment attaches scaffold files without any change to the
+frozen contract. (Status: **built** — `infra_synth/scaffold.py: app_scaffold`;
+`tasks.build_verify_spec` attaches `smoke["context_files"]`;
+`LocalDockerVerifier` writes them into the context, guarding against path
+traversal. Verified end-to-end under a real Docker daemon: gold builds + serves
+health → 200 for both frameworks.)
 
 ### Sentinel roadmap (C1)
 
@@ -164,9 +167,15 @@ lands; the analysis notes this so the comparison is not over-read.
 
 `analysis/reward_hacking.py` is built (taxonomy, `classify_hack`,
 `cheating_rate`, `compare_weak_vs_hardened`, `load_rollouts`, and a matplotlib
-`plot_taxonomy`). The end-to-end study (logging real rollouts under both
-backends on a mutated-task set, then comparing) is **WIP** — it needs the
-training run and an impossible-task generator.
+`plot_taxonomy`). The impossible-task generator (`infra_synth.impossible`:
+`impossible_tasks` + `adversarial_corpus`) and the **end-to-end study runner**
+(`eval/c3_study.py`) now exist: `run_c3_study` grades the same trials —
+gold-on-impossible specs + the adversarial corpus — through both backends and
+reports the taxonomy comparison, an undeserved-pass rate (a pass on an
+impossible task is a successful cheat), and a per-category breakdown.
+`--mock` simulates the hardened sandbox so the path runs with no server. The
+**live-infra numbers** still await NS-4 (a running Sentinel) and the GRPO run
+that logs policy rollouts; the code path is exercised against the mock.
 
 ---
 
@@ -212,18 +221,26 @@ overlays. matplotlib is imported locally so the data path works without it.
 ## 5. Status summary
 
 **Built & tested (no GPU/heavy deps):** the frozen verifier contract; all four
-backends (`static`/`local-py`/`local-docker` mapping/`sentinel` via injectable
-`httpx` transport); reward shaping; the `infra_synth` env helpers (tasks /
-parser / gold) with disjoint splits; `eval/passk.py`; `eval/benchmark.py`
+backends (`static`/`local-py`/`local-docker`/`sentinel` via injectable
+`httpx` transport); the **app-scaffold build context** (NS-2) that makes
+`local-docker` build + serve realistic FastAPI/Flask specs (verified
+end-to-end under a real Docker daemon); reward shaping; the `infra_synth` env
+helpers (tasks / parser / gold / scaffold) with disjoint splits; `eval/passk.py`;
+`eval/benchmark.py`
 (injected `generate_fn` + multi-seed + OpenAI/vLLM factory); `eval/throughput.py`
 and `eval/parity.py` (M2, verified against `MockTransport`); `analysis/
 reward_hacking.py` (C3 taxonomy + cheating-rate); `analysis/curves.py`.
 
-**WIP / roadmap:** the GRPO training run and configs (parallel work); genuine
-`local-docker` via the **app-scaffold build context** (§2); the Sentinel
-**`infra` job type** (C1, §2); the end-to-end C3 study on logged rollouts +
-mutated tasks (§3); and Sentinel surfacing seccomp/network signals (with seccomp
-re-enabled) so taxonomy category 6 is fully counted.
+and `analysis/curves.py`. The C3 study now also has its **end-to-end runner**
+(`eval/c3_study.py`) and the impossible-task generator (`infra_synth.impossible`),
+exercised against a mock Sentinel.
+
+**WIP / roadmap:** the GRPO training run and configs (parallel work); the
+Sentinel **`infra` job type** (C1, §2); the **live-infra** C3 numbers — the
+runner exists, but real weak-vs-hardened figures await NS-4 (a running Sentinel)
+and the GRPO run that logs policy rollouts (§3); and Sentinel surfacing
+seccomp/network signals (with seccomp re-enabled) so taxonomy category 6 is
+fully counted.
 
 ### CLIs
 
@@ -238,6 +255,10 @@ python -m eval.throughput --mock --n 256 --concurrency 1 4 16 64   # no server
 
 # M2 parity (Sentinel vs local-py):
 python -m eval.parity --base-url http://localhost:8080 --n 32
+
+# C3 end-to-end weak-vs-hardened study (impossible tasks + adversarial corpus):
+python -m eval.c3_study --mock --n 12               # no server (simulated sandbox)
+python -m eval.c3_study --base-url http://localhost:8080 --n 12   # live Sentinel
 ```
 
 ### References

@@ -35,10 +35,10 @@ import urllib.request
 
 from .smoke.checks import (
     build_python_harness,
-    check_dockerfile,
+    check_artifact,
     parse_harness_output,
 )
-from .types import Verifier, VerifyResult, VerifySpec
+from .types import ArtifactKind, Verifier, VerifyResult, VerifySpec
 
 __all__ = [
     "StaticVerifier",
@@ -64,15 +64,17 @@ def _tail(s: str | bytes | None, n: int = _MAX_TAIL) -> str:
 class StaticVerifier:
     """In-process static analysis. ``name='static'``. No execution sandbox.
 
-    The universal fallback / weak lower bound: runs :func:`check_dockerfile`
-    directly and maps the result. Never times out, never OOMs.
+    The universal fallback / weak lower bound: runs :func:`check_artifact`
+    (dispatching on ``spec.kind`` to :func:`check_dockerfile` /
+    :func:`check_compose`) directly and maps the result. Never times out, never
+    OOMs.
     """
 
     name = "static"
 
     async def verify(self, artifact: str, spec: VerifySpec) -> VerifyResult:
         t0 = time.monotonic()
-        out = check_dockerfile(artifact, spec)
+        out = check_artifact(artifact, spec)
         result = VerifyResult(
             build_ok=bool(out["build_ok"]),
             smoke_ok=bool(out["smoke_ok"]),
@@ -125,6 +127,11 @@ class LocalPyVerifier:
     Mapping: wall-clock timeout -> ``timed_out`` + ``resource_exhaustion``;
     exit 137 / ``MemoryError`` in stderr -> ``oom_killed`` + ``resource_exhaustion``;
     other non-zero exits -> build/smoke ``False`` with ``status`` recorded.
+
+    :attr:`ArtifactKind.PYTHON` artifacts run *directly* as the subprocess source
+    (no harness) -- mirroring :class:`SentinelVerifier` -- so the C3 weak vs
+    hardened comparison executes the same raw code. For that path ``build_ok``
+    means "it ran" and ``smoke_ok`` means "exited 0".
     """
 
     name = "local-py"
@@ -141,7 +148,10 @@ class LocalPyVerifier:
         self.python_exe = python_exe or sys.executable or "python3"
 
     async def verify(self, artifact: str, spec: VerifySpec) -> VerifyResult:
-        harness = build_python_harness(artifact, spec)
+        is_python = spec.kind == ArtifactKind.PYTHON
+        # PYTHON: run the artifact itself (mirrors SentinelVerifier); any other
+        # kind: wrap it in the deterministic harness.
+        source = artifact if is_python else build_python_harness(artifact, spec)
         limits = spec.limits
         # Generous: prefer explicit override, else 4x the spec wall (this is the
         # weak baseline -- it should rarely kill legitimate work).
@@ -155,11 +165,17 @@ class LocalPyVerifier:
         pids = max(limits.pids, 64)
 
         return await asyncio.to_thread(
-            self._run_blocking, harness, wall_s, mem_mb, cpu_s, pids
+            self._run_blocking, source, wall_s, mem_mb, cpu_s, pids, is_python
         )
 
     def _run_blocking(
-        self, harness: str, wall_s: float, mem_mb: int, cpu_s: int, pids: int
+        self,
+        source: str,
+        wall_s: float,
+        mem_mb: int,
+        cpu_s: int,
+        pids: int,
+        is_python: bool = False,
     ) -> VerifyResult:
         result = VerifyResult(backend=self.name)
         preexec = None
@@ -169,7 +185,7 @@ class LocalPyVerifier:
         t0 = time.monotonic()
         try:
             proc = subprocess.run(
-                [self.python_exe, "-I", "-c", harness],
+                [self.python_exe, "-I", "-c", source],
                 capture_output=True,
                 text=True,
                 timeout=wall_s,
@@ -205,6 +221,14 @@ class LocalPyVerifier:
         if proc.returncode is not None and proc.returncode < 0:
             result.status = f"signal-{-proc.returncode}"
             result.hack_flags.resource_exhaustion = True
+            return result
+
+        if is_python:
+            # Raw code path: no harness JSON. build_ok == "it ran", smoke_ok ==
+            # exit 0 (mirrors SentinelVerifier). No spec_gaming signal possible.
+            result.build_ok = True
+            result.smoke_ok = proc.returncode == 0
+            result.status = "ok" if proc.returncode == 0 else "nonzero-exit"
             return result
 
         parsed = parse_harness_output(proc.stdout or "")
@@ -365,6 +389,17 @@ class LocalDockerVerifier:
         try:
             with open(os.path.join(tmpdir, "Dockerfile"), "w", encoding="utf-8") as fh:
                 fh.write(artifact or "")
+
+            # Scaffold/app files the Dockerfile COPYs (requirements.txt, app/…).
+            # ``context_files`` maps POSIX-relative paths -> contents; each must
+            # stay inside the build context (guard against ``..`` traversal).
+            for relpath, content in (smoke.get("context_files") or {}).items():
+                dest = os.path.normpath(os.path.join(tmpdir, relpath))
+                if dest != tmpdir and not dest.startswith(tmpdir + os.sep):
+                    raise ValueError(f"context_files path escapes build context: {relpath!r}")
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "w", encoding="utf-8") as fh:
+                    fh.write(content if isinstance(content, str) else str(content))
 
             # --- build --------------------------------------------------
             try:

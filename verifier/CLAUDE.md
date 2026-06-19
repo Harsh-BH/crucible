@@ -1,8 +1,10 @@
 # verifier/ — the pluggable verifier layer
 
-Distribution `crucible-verifier`, import `verifier`. Dependency-light: only
-`httpx` + stdlib (no torch/verifiers). Everything else in the repo depends on
-the contract here.
+Distribution `crucible-verifier`, import `verifier`. **Nested package**: the
+importable code lives in `verifier/verifier/` (so a built wheel installs as
+`import verifier` non-editable); the Hub/dist `pyproject.toml` sits one level up.
+Dependency-light: only `httpx` + stdlib (no torch/verifiers). Everything else in
+the repo depends on the contract here.
 
 ## Files
 
@@ -35,8 +37,10 @@ uv run pytest tests/test_backends.py tests/test_sentinel_client.py \
 
 (`tests/test_contracts.py` guards `types.py`.)
 
-## Note (NS-1)
+## Note (NS-1 — done)
 
-`verifier/` uses a flat layout, so a *built wheel* ships modules at top level and
-`import verifier` fails non-editable. NS-1 in `docs/ROADMAP.md` is the
-nested-package fix needed before Hub publish (`infra-synth` depends on this).
+NS-1 is complete: `verifier/` was moved to a nested layout (`verifier/verifier/`)
+so a built `crucible-verifier` wheel ships a proper `verifier/` package and
+`import verifier` works non-editable (verified in a clean venv). Ruff's isort
+no longer auto-detects `verifier` as first-party, so the root `pyproject.toml`
+declares `known-first-party = ["verifier"]`.

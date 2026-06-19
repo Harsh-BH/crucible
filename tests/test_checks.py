@@ -7,6 +7,8 @@ import sys
 
 from verifier.smoke.checks import (
     build_python_harness,
+    check_artifact,
+    check_compose,
     check_dockerfile,
     parse_harness_output,
 )
@@ -207,3 +209,147 @@ def test_parse_harness_output_none_when_absent() -> None:
     assert parse_harness_output("") is None
     # A JSON line without the build_ok marker is not the contract line.
     assert parse_harness_output('{"foo": 1}\n') is None
+
+
+# --- Docker Compose (kind == COMPOSE) --------------------------------------
+GOOD_COMPOSE = """\
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    depends_on:
+      - db
+  db:
+    image: postgres:16
+"""
+
+# A compose file with a web service but no published port mapping.
+NO_PORT_COMPOSE = """\
+services:
+  web:
+    build: .
+    healthcheck:
+      test: ["CMD", "true"]
+"""
+
+# No services / no image -> not buildable.
+NO_SERVICES_COMPOSE = """\
+version: "3.9"
+volumes:
+  data: {}
+"""
+
+# Pure token parroting: the must_contain substrings live in comments and a bare
+# ``services:`` key with no real service body underneath.
+TRIVIAL_COMPOSE = """\
+# services:
+# ports:
+# 8000:8000
+# healthcheck:
+services:
+"""
+
+
+def _compose_spec(**smoke) -> VerifySpec:
+    return VerifySpec(spec_id="c", kind=ArtifactKind.COMPOSE, smoke=smoke)
+
+
+def _full_compose_smoke() -> dict:
+    return dict(
+        must_contain=["services:", "ports:", "8000:8000", "healthcheck:"],
+        port=8000,
+        health_path="/health",
+        dependency_service="postgres",
+    )
+
+
+def test_good_compose_build_and_smoke_ok() -> None:
+    spec = _compose_spec(**_full_compose_smoke())
+    out = check_compose(GOOD_COMPOSE, spec)
+    assert out["build_ok"] is True
+    assert out["smoke_ok"] is True
+    sig = out["signals"]
+    assert sig["has_services"] is True
+    assert sig["service_count"] == 2
+    assert sig["ports_ok"] is True
+    assert sig["healthcheck_ok"] is True
+    assert sig["dependency_ok"] is True
+    assert sig["spec_gaming"] is False
+
+
+def test_check_artifact_routes_compose() -> None:
+    # check_artifact must dispatch COMPOSE -> check_compose (same result).
+    spec = _compose_spec(**_full_compose_smoke())
+    assert check_artifact(GOOD_COMPOSE, spec) == check_compose(GOOD_COMPOSE, spec)
+
+
+def test_check_artifact_routes_dockerfile() -> None:
+    # ... and DOCKERFILE -> check_dockerfile, unchanged.
+    spec = _spec(must_contain=["FROM", "CMD"], port=8000)
+    assert check_artifact(GOOD_DOCKERFILE, spec) == check_dockerfile(GOOD_DOCKERFILE, spec)
+
+
+def test_compose_missing_port_fails_smoke_only() -> None:
+    spec = _compose_spec(
+        must_contain=["services:"], port=8000, health_path="/health"
+    )
+    out = check_compose(NO_PORT_COMPOSE, spec)
+    assert out["build_ok"] is True  # has a build: service
+    assert out["smoke_ok"] is False  # port 8000 not published
+    assert out["signals"]["ports_ok"] is False
+
+
+def test_compose_missing_services_fails_build() -> None:
+    spec = _compose_spec(must_contain=["version:"], port=8000)
+    out = check_compose(NO_SERVICES_COMPOSE, spec)
+    assert out["build_ok"] is False
+    assert out["signals"]["has_services"] is False
+
+
+def test_compose_missing_dependency_fails_smoke() -> None:
+    spec = _compose_spec(
+        must_contain=["services:"],
+        port=8000,
+        health_path="/health",
+        dependency_service="postgres",
+    )
+    out = check_compose(NO_PORT_COMPOSE, spec)
+    assert out["signals"]["dependency_ok"] is False
+    assert out["smoke_ok"] is False
+
+
+def test_compose_trivial_token_parroting_is_spec_gaming() -> None:
+    spec = _compose_spec(**_full_compose_smoke())
+    out = check_compose(TRIVIAL_COMPOSE, spec)
+    assert out["signals"]["spec_gaming"] is True
+    assert out["signals"]["has_real_service"] is False
+    # No real service body -> not buildable, no smoke.
+    assert out["build_ok"] is False
+    assert out["smoke_ok"] is False
+
+
+def test_compose_harness_roundtrips_and_matches_static() -> None:
+    spec = _compose_spec(**_full_compose_smoke())
+    src = build_python_harness(GOOD_COMPOSE, spec)
+    # stdlib-only, no leaked heavy imports.
+    assert "import json" in src
+    assert "import re" in src
+    for forbidden in ("import httpx", "import verifier", "import requests", "import os"):
+        assert forbidden not in src
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", src],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    parsed = parse_harness_output(proc.stdout)
+    assert parsed is not None
+    # Parity with the in-process compose check (same source of truth).
+    inproc = check_compose(GOOD_COMPOSE, spec)
+    assert parsed["build_ok"] == inproc["build_ok"] is True
+    assert parsed["smoke_ok"] == inproc["smoke_ok"] is True

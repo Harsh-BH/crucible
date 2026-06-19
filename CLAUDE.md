@@ -16,20 +16,21 @@ are separate distributions wired in.
 
 ```
 RLF-VRTP/
-├── verifier/                  dist `crucible-verifier`, import `verifier`
-│   ├── types.py               FROZEN CONTRACTS — do not edit (see below)
-│   ├── backends.py            StaticVerifier / LocalPyVerifier / LocalDockerVerifier / get_verifier()
-│   ├── sentinel_client.py     async SentinelClient + SentinelVerifier (Sentinel API :8080)
-│   ├── reward.py              shape_reward(), result_to_metrics()
-│   └── smoke/checks.py        Dockerfile checks + build_python_harness()
+├── verifier/                  dist `crucible-verifier` (nested pkg; pyproject one level up)
+│   └── verifier/              import `verifier`
+│       ├── types.py           FROZEN CONTRACTS — do not edit (see below)
+│       ├── backends.py        StaticVerifier / LocalPyVerifier / LocalDockerVerifier / get_verifier()
+│       ├── sentinel_client.py async SentinelClient + SentinelVerifier (Sentinel API :8080)
+│       ├── reward.py          shape_reward(), result_to_metrics()
+│       └── smoke/checks.py    Dockerfile checks + build_python_harness()
 ├── environments/infra_synth/  dist `infra-synth`, import `infra_synth` (nested pkg)
 │   ├── pyproject.toml          verifiers Hub spec (+ [tool.verifiers.eval])
-│   └── infra_synth/            __init__.py · environment.py (load_environment) · tasks.py · parser.py · gold.py
+│   └── infra_synth/            __init__.py · environment.py (load_environment) · tasks.py · parser.py · gold.py · scaffold.py
 ├── training/                  run.py (TRL GRPO) · data.py · rewards.py · seeds.py · configs/
 ├── eval/                      passk.py · benchmark.py · parity.py · throughput.py
 ├── analysis/                  reward_hacking.py (C3 taxonomy) · curves.py (RLVR dashboard)
 ├── docs/                      DESIGN.md · ROADMAP.md
-└── tests/                     243 tests (verifier · env · training · eval · analysis)
+└── tests/                     249 tests (verifier · env · training · eval · analysis)
 ```
 
 Each package below has its own `CLAUDE.md` with package-specific detail; Claude
@@ -40,7 +41,7 @@ Code loads it on demand when you work in that subtree.
 | Task | Command |
 | --- | --- |
 | Sync deps (core + dev) | `uv sync --extra dev` |
-| Run all tests | `uv run pytest -q` (243 pass, 1 skipped — needs an HF download) |
+| Run all tests | `uv run pytest -q` (249 pass, 1 skipped — needs an HF download) |
 | Lint | `uv run ruff check .` |
 | Types | `uv run mypy verifier training eval` |
 | Train — TRL baseline | `python training/run.py --env gsm8k --model Qwen/Qwen3-1.7B --num-generations 8 --seed 0` |
@@ -69,8 +70,8 @@ Code loads it on demand when you work in that subtree.
 
 ## Frozen contract (read before editing the verifier layer)
 
-`verifier/types.py` is **FROZEN**. Backends, the environment, reward shaping,
-training, and eval all depend on its exact names and fields: `Verifier`
+`verifier/verifier/types.py` is **FROZEN**. Backends, the environment, reward
+shaping, training, and eval all depend on its exact names and fields: `Verifier`
 (protocol), `VerifyResult`, `VerifySpec`, `HackFlags`, `ResourceLimits`,
 `ArtifactKind`. **Never edit it without a coordinated update across every
 consumer.** `tests/test_contracts.py` pins it and will fail if it drifts.
@@ -94,5 +95,6 @@ hardened (`sentinel`)** running the *same* harness — the `HackFlags` differenc
 
 - **Design / rationale** (verifier strategy, C3, eval protocol): `docs/DESIGN.md`.
 - **Forward plan** (next steps NS-1..NS-4, milestones M3–M6, C1 Sentinel
-  extension): `docs/ROADMAP.md`. Nearest steps: **NS-1** `crucible-verifier`
-  wheel packaging; **NS-2** infra_synth app scaffold for genuine build+smoke.
+  extension): `docs/ROADMAP.md`. **NS-1** (wheel packaging) and **NS-2** (app
+  scaffold for genuine build+smoke) are **done**; nearest remaining steps need
+  real infra: **NS-3** GPU GRPO run (M1) and **NS-4** live Sentinel (M2).

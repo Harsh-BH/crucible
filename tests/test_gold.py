@@ -67,3 +67,19 @@ def test_gold_passes_static_check(task: dict) -> None:
     result = checks.check_dockerfile(df, spec)
     assert result["build_ok"] is True, result.get("reasons")
     assert result["smoke_ok"] is True, result.get("reasons")
+
+
+# --- compose gold-passes-its-own-spec CRUX (multi-kind analog) -------------
+_COMPOSE_SAMPLE = infra_tasks.generate_tasks(n=16, seed=0, split="test", kind="compose")
+
+
+@pytest.mark.parametrize(
+    "task", _COMPOSE_SAMPLE, ids=[t["info"]["spec_id"] for t in _COMPOSE_SAMPLE]
+)
+def test_gold_compose_passes_static_check(task: dict) -> None:
+    info = task["info"]
+    yml = infra_gold.gold_compose(info)
+    spec = infra_tasks.build_verify_spec(info)
+    result = checks.check_compose(yml, spec)
+    assert result["build_ok"] is True, result.get("reasons")
+    assert result["smoke_ok"] is True, result.get("reasons")
