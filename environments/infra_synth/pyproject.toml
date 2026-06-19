@@ -1,6 +1,6 @@
 [project]
 name = "infra-synth"
-version = "0.1.0"
+version = "0.1.1"
 description = "RLVR environment: generate infrastructure-as-code (Dockerfile first) graded by build + smoke test in a sandboxed verifier."
 tags = ["single-turn", "code", "infrastructure", "dockerfile", "rlvr", "verifiable-rewards"]
 license = "Apache-2.0"
@@ -8,28 +8,29 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "verifiers>=0.1.14",
     "datasets",
-    "httpx>=0.27",  # the bundled `verifier` package needs it (was transitive via crucible-verifier)
+    # `crucible-verifier` is not on PyPI (it is a sibling workspace dist). The Hub
+    # rebuilds this env from a source archive that does NOT include sibling dirs,
+    # so it is pulled from this repo's `verifier/` subdirectory via a git dep
+    # (httpx etc. come transitively). Pinned to a commit for reproducible builds —
+    # bump the SHA when `verifier/` changes. In the dev workspace, the
+    # `[tool.uv.sources] crucible-verifier = {workspace = true}` entry overrides
+    # this URL to the editable local member, so local dev/tests are unaffected.
+    "crucible-verifier @ git+https://github.com/Harsh-BH/RLF-VRTP.git@4de1eab8181f0af239501a873f942fe7f497e9bc#subdirectory=verifier",
 ]
-# NOTE: `crucible-verifier` is intentionally NOT a dependency. It is not on PyPI
-# (it is a sibling workspace dist), so a Hub install could not resolve it. Instead
-# the published wheel BUNDLES the `verifier` package (force-include below), making
-# the environment self-contained: `import verifier` resolves from this wheel alone.
-# In the dev workspace the editable `crucible-verifier` member still provides
-# `verifier` (pulled in by the root `crucible` package), so local dev is unchanged.
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Allow the PEP 508 direct (git) reference to crucible-verifier above.
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["infra_synth"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "pyproject.toml" = "infra_synth/pyproject.toml"
-# Vendor the verifier package into the wheel as the top-level `verifier` package
-# (keeps the frozen `from verifier.types import ...` imports working) so the Hub
-# env installs with no external `crucible-verifier` dependency.
-"../../verifier/verifier" = "verifier"
 
 [tool.verifiers.eval]
 num_examples = 10

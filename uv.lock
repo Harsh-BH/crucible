@@ -1547,18 +1547,18 @@ wheels = [
 
 [[package]]
 name = "infra-synth"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "environments/infra_synth" }
 dependencies = [
+    { name = "crucible-verifier" },
     { name = "datasets" },
-    { name = "httpx" },
     { name = "verifiers" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "crucible-verifier", editable = "verifier" },
     { name = "datasets" },
-    { name = "httpx", specifier = ">=0.27" },
     { name = "verifiers", specifier = ">=0.1.14" },
 ]
 
