@@ -11,6 +11,8 @@ from verifier.smoke.checks import (
     check_ci_yaml,
     check_compose,
     check_dockerfile,
+    check_k8s,
+    check_terraform,
     parse_harness_output,
 )
 from verifier.types import ArtifactKind, VerifySpec
@@ -515,5 +517,314 @@ def test_ci_yaml_harness_roundtrips_and_matches_static() -> None:
     assert parsed is not None
     # Parity with the in-process ci-yaml check (same source of truth).
     inproc = check_ci_yaml(GOOD_CI_YAML, spec)
+    assert parsed["build_ok"] == inproc["build_ok"] is True
+    assert parsed["smoke_ok"] == inproc["smoke_ok"] is True
+
+
+# --- Terraform (HCL) (kind == TERRAFORM) -----------------------------------
+GOOD_TERRAFORM = """\
+terraform {
+  required_providers {
+    docker = {
+      source = "kreuzwerker/docker"
+    }
+  }
+}
+
+provider "docker" {}
+
+resource "docker_image" "app" {
+  name = "app:latest"
+}
+
+resource "docker_container" "app" {
+  name  = "app"
+  image = docker_image.app.image_id
+  ports {
+    internal = 8000
+    external = 8000
+  }
+}
+"""
+
+# Has must_contain tokens + provider but NO resource block -> not buildable.
+NO_RESOURCE_TERRAFORM = """\
+terraform {
+  required_version = ">= 1.5"
+}
+
+provider "docker" {}
+"""
+
+# Has a resource, but of the wrong type / no port -> build_ok, smoke_ok False.
+WRONG_TYPE_TERRAFORM = """\
+provider "docker" {}
+
+resource "docker_network" "net" {
+  name = "appnet"
+}
+"""
+
+# Pure token parroting: every must_contain substring is present (in comments /
+# a bare provider line) but there is NO real resource block.
+TRIVIAL_TERRAFORM = """\
+# resource "docker_container" "app" {
+# ports
+# 8000
+terraform {}
+provider "docker" {}
+"""
+
+
+def _terraform_spec(**smoke) -> VerifySpec:
+    return VerifySpec(spec_id="tf", kind=ArtifactKind.TERRAFORM, smoke=smoke)
+
+
+def _full_terraform_smoke() -> dict:
+    return dict(
+        must_contain=["terraform {", "provider", "resource"],
+        resource_type="docker_container",
+        port=8000,
+    )
+
+
+def test_good_terraform_build_and_smoke_ok() -> None:
+    spec = _terraform_spec(**_full_terraform_smoke())
+    out = check_terraform(GOOD_TERRAFORM, spec)
+    assert out["build_ok"] is True
+    assert out["smoke_ok"] is True
+    sig = out["signals"]
+    assert sig["has_terraform_block"] is True
+    assert sig["has_provider"] is True
+    assert sig["resource_count"] == 2
+    assert sig["resource_type_ok"] is True
+    assert sig["port_ok"] is True
+    assert sig["spec_gaming"] is False
+
+
+def test_check_artifact_routes_terraform() -> None:
+    # check_artifact must dispatch TERRAFORM -> check_terraform (same result).
+    spec = _terraform_spec(**_full_terraform_smoke())
+    assert check_artifact(GOOD_TERRAFORM, spec) == check_terraform(GOOD_TERRAFORM, spec)
+
+
+def test_terraform_missing_resource_fails_build() -> None:
+    spec = _terraform_spec(must_contain=["terraform {", "provider"])
+    out = check_terraform(NO_RESOURCE_TERRAFORM, spec)
+    assert out["build_ok"] is False
+    assert out["signals"]["resource_count"] == 0
+
+
+def test_terraform_wrong_type_or_missing_port_fails_smoke_only() -> None:
+    spec = _terraform_spec(
+        must_contain=["provider", "resource"],
+        resource_type="docker_container",
+        port=8000,
+    )
+    out = check_terraform(WRONG_TYPE_TERRAFORM, spec)
+    assert out["build_ok"] is True  # has a provider + a resource block
+    assert out["smoke_ok"] is False  # wrong resource type AND no port
+    assert out["signals"]["resource_type_ok"] is False
+    assert out["signals"]["port_ok"] is False
+
+
+def test_terraform_trivial_token_parroting_is_spec_gaming() -> None:
+    spec = _terraform_spec(**_full_terraform_smoke())
+    out = check_terraform(TRIVIAL_TERRAFORM, spec)
+    assert out["signals"]["spec_gaming"] is True
+    # The cheat is the missing body, not missing tokens.
+    assert out["signals"]["missing_required"] == []
+    assert out["signals"]["resource_count"] == 0
+    assert out["build_ok"] is False
+    assert out["smoke_ok"] is False
+
+
+def test_terraform_harness_roundtrips_and_matches_static() -> None:
+    spec = _terraform_spec(**_full_terraform_smoke())
+    src = build_python_harness(GOOD_TERRAFORM, spec)
+    # stdlib-only, no leaked heavy imports.
+    assert "import json" in src
+    assert "import re" in src
+    for forbidden in ("import httpx", "import verifier", "import requests", "import hcl2"):
+        assert forbidden not in src
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", src],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    parsed = parse_harness_output(proc.stdout)
+    assert parsed is not None
+    # Parity with the in-process terraform check (same source of truth).
+    inproc = check_terraform(GOOD_TERRAFORM, spec)
+    assert parsed["build_ok"] == inproc["build_ok"] is True
+    assert parsed["smoke_ok"] == inproc["smoke_ok"] is True
+
+
+# --- Kubernetes (YAML manifests) (kind == K8S) -----------------------------
+GOOD_K8S = """\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: app:latest
+          ports:
+            - containerPort: 8000
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+spec:
+  selector:
+    app: app
+  ports:
+    - port: 8000
+      targetPort: 8000
+"""
+
+# Only a Deployment (no Service) and no probe -> build_ok, smoke_ok False.
+NO_SERVICE_K8S = """\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: app:latest
+          ports:
+            - containerPort: 8000
+"""
+
+# Missing kind:/metadata: -> a malformed manifest -> not buildable.
+MALFORMED_K8S = """\
+apiVersion: apps/v1
+spec:
+  replicas: 1
+"""
+
+# Pure token parroting: every must_contain substring is present (in comments /
+# bare apiVersion+kind+metadata keys) but there is NO real manifest body (no
+# ``spec:`` block).
+TRIVIAL_K8S = """\
+# spec:
+# containerPort: 8000
+# Deployment
+# Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: parrot
+"""
+
+
+def _k8s_spec(**smoke) -> VerifySpec:
+    return VerifySpec(spec_id="k8s", kind=ArtifactKind.K8S, smoke=smoke)
+
+
+def _full_k8s_smoke() -> dict:
+    return dict(
+        must_contain=["apiVersion:", "kind:", "metadata:", "Deployment", "Service"],
+        port=8000,
+        health_path="/health",
+        kinds_required=["Deployment", "Service"],
+    )
+
+
+def test_good_k8s_build_and_smoke_ok() -> None:
+    spec = _k8s_spec(**_full_k8s_smoke())
+    out = check_k8s(GOOD_K8S, spec)
+    assert out["build_ok"] is True
+    assert out["smoke_ok"] is True
+    sig = out["signals"]
+    assert sig["manifest_count"] == 2
+    assert sig["kinds_found"] == ["Deployment", "Service"]
+    assert sig["has_spec"] is True
+    assert sig["port_ok"] is True
+    assert sig["probe_ok"] is True
+    assert sig["spec_gaming"] is False
+
+
+def test_check_artifact_routes_k8s() -> None:
+    # check_artifact must dispatch K8S -> check_k8s (same result).
+    spec = _k8s_spec(**_full_k8s_smoke())
+    assert check_artifact(GOOD_K8S, spec) == check_k8s(GOOD_K8S, spec)
+
+
+def test_k8s_malformed_manifest_fails_build() -> None:
+    spec = _k8s_spec(must_contain=["apiVersion:"])
+    out = check_k8s(MALFORMED_K8S, spec)
+    assert out["build_ok"] is False
+    # Missing kind:/metadata: -> not well formed.
+    assert "Deployment" not in out["signals"]["kinds_found"]
+
+
+def test_k8s_missing_service_kind_fails_smoke_only() -> None:
+    # must_contain is satisfied by the Deployment-only manifest, so build passes;
+    # smoke still fails because the required Service kind is absent.
+    spec = _k8s_spec(
+        must_contain=["apiVersion:", "kind:", "metadata:", "Deployment"],
+        port=8000,
+        health_path="/health",
+        kinds_required=["Deployment", "Service"],
+    )
+    out = check_k8s(NO_SERVICE_K8S, spec)
+    assert out["build_ok"] is True  # one well-formed Deployment manifest
+    assert out["smoke_ok"] is False  # no Service kind (and no probe)
+    assert out["signals"]["kinds_found"] == ["Deployment"]
+
+
+def test_k8s_trivial_token_parroting_is_spec_gaming() -> None:
+    spec = _k8s_spec(**_full_k8s_smoke())
+    out = check_k8s(TRIVIAL_K8S, spec)
+    assert out["signals"]["spec_gaming"] is True
+    # The cheat is the missing body (no spec:), not missing tokens.
+    assert out["signals"]["missing_required"] == []
+    assert out["signals"]["has_spec"] is False
+    assert out["build_ok"] is True  # the parrot doc is well-formed + tokens present
+    assert out["smoke_ok"] is False
+
+
+def test_k8s_harness_roundtrips_and_matches_static() -> None:
+    spec = _k8s_spec(**_full_k8s_smoke())
+    src = build_python_harness(GOOD_K8S, spec)
+    # stdlib-only, no leaked heavy imports.
+    assert "import json" in src
+    assert "import re" in src
+    for forbidden in ("import httpx", "import verifier", "import requests", "import yaml"):
+        assert forbidden not in src
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", src],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    parsed = parse_harness_output(proc.stdout)
+    assert parsed is not None
+    # Parity with the in-process k8s check (same source of truth).
+    inproc = check_k8s(GOOD_K8S, spec)
     assert parsed["build_ok"] == inproc["build_ok"] is True
     assert parsed["smoke_ok"] == inproc["smoke_ok"] is True

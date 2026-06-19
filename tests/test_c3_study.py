@@ -233,14 +233,22 @@ def test_default_trials_builds_corpus_plus_gold() -> None:
     pytest.importorskip("infra_synth")
     from eval.c3_study import default_trials
 
-    trials = default_trials(n=4)
-    assert len(trials) > 4  # corpus entries + 4 gold-on-impossible trials
+    n = 10
+    trials = default_trials(n=n)
     labels = [t.label for t in trials]
-    assert any(label.startswith("adv:") for label in labels)
+    assert any(label.startswith("adv:") for label in labels)  # corpus present
     gold = [t for t in trials if t.label.startswith("task-gold:")]
-    assert len(gold) == 4
-    # Gold trials are Dockerfile-kind with a non-empty category.
+    # Gold-on-impossible trials span ALL artifact kinds: n split across the 5.
+    per_kind = max(1, n // 5)
+    assert len(gold) == per_kind * 5
+    gold_kinds = {t.spec.kind for t in gold}
+    assert gold_kinds == {
+        ArtifactKind.DOCKERFILE,
+        ArtifactKind.COMPOSE,
+        ArtifactKind.CI_YAML,
+        ArtifactKind.TERRAFORM,
+        ArtifactKind.K8S,
+    }
     for t in gold:
-        assert t.spec.kind == ArtifactKind.DOCKERFILE
         assert t.category  # e.g. "weak_tests"
-        assert t.artifact.startswith("FROM ")
+        assert t.artifact  # non-empty gold reference for its kind

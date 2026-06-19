@@ -19,7 +19,9 @@ spec `pyproject.toml` sits one level up. Depends on `crucible-verifier`.
   (graded by `check_compose`); `"dockerfile"` stays the default. A third
   `ArtifactKind` is wired the same way: `artifact_kind="ci-yaml"` (or
   `kind="ci-yaml"`) emits/grades a GitHub Actions workflow (graded by
-  `check_ci_yaml`).
+  `check_ci_yaml`). `artifact_kind="terraform"` (graded by `check_terraform`)
+  and `artifact_kind="k8s"` (graded by `check_k8s`) are wired the same way — so
+  all declared `ArtifactKind`s are now wired end-to-end through the static path.
 - `infra_synth/parser.py` — `extract_dockerfile()` pulls the last fenced
   ```dockerfile block from a completion; `extract_compose()` pulls the last
   ```yaml/```yml/```compose block (Docker Compose support); `extract_ci_yaml()`

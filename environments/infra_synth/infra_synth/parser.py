@@ -43,6 +43,12 @@ _COMPOSE_LANGS: tuple[str, ...] = ("yaml", "yml", "compose", "docker-compose")
 # Info-strings that mark a GitHub Actions workflow (YAML) block (case-insensitive).
 _CI_YAML_LANGS: tuple[str, ...] = ("yaml", "yml")
 
+# Info-strings that mark a Terraform (HCL) block (compared case-insensitively).
+_TERRAFORM_LANGS: tuple[str, ...] = ("hcl", "terraform", "tf")
+
+# Info-strings that mark a Kubernetes manifest (YAML) block (case-insensitive).
+_K8S_LANGS: tuple[str, ...] = ("yaml", "yml")
+
 
 def _iter_blocks(text: str) -> list[tuple[str, str]]:
     """Return ``[(lang, body), ...]`` for every fenced block, in document order.
@@ -118,4 +124,34 @@ def extract_ci_yaml(text: str) -> str:
     return extract_fenced(text, _CI_YAML_LANGS)
 
 
-__all__ = ["extract_dockerfile", "extract_compose", "extract_ci_yaml", "extract_fenced"]
+def extract_terraform(text: str) -> str:
+    """Pull the Terraform (HCL) artifact out of a model completion.
+
+    Prefers ```` ```hcl ```` / ```` ```terraform ```` / ```` ```tf ```` fenced
+    blocks but accepts a bare ```` ``` ```` block; takes the **last** matching
+    block and returns its stripped contents (``""`` if none). Robust to
+    surrounding prose and to multiple code blocks in the same completion (mirrors
+    :func:`extract_dockerfile`).
+    """
+    return extract_fenced(text, _TERRAFORM_LANGS)
+
+
+def extract_k8s(text: str) -> str:
+    """Pull the Kubernetes (YAML manifests) artifact out of a model completion.
+
+    Prefers ```` ```yaml ```` / ```` ```yml ```` fenced blocks but accepts a bare
+    ```` ``` ```` block; takes the **last** matching block and returns its
+    stripped contents (``""`` if none). Robust to surrounding prose and to
+    multiple code blocks in the same completion (mirrors :func:`extract_compose`).
+    """
+    return extract_fenced(text, _K8S_LANGS)
+
+
+__all__ = [
+    "extract_dockerfile",
+    "extract_compose",
+    "extract_ci_yaml",
+    "extract_terraform",
+    "extract_k8s",
+    "extract_fenced",
+]

@@ -42,20 +42,21 @@
   taxonomy + an undeserved-pass metric. Demonstrated with the simulated sandbox
   (`--mock`): the hardened side closes `resource_manipulation` (mem/timer) that
   weak lets pass. The **live weak-vs-hardened numbers** still await NS-4.
-- **M4 (started) — Docker Compose + GitHub Actions CI-YAML artifact kinds,
-  end-to-end (static path).** The static checker is now **kind-dispatched**
-  (`verifier.smoke.checks.check_artifact` + a per-kind harness builder);
-  `check_compose` and `check_ci_yaml` are stdlib-only heuristic stand-ins (no
-  PyYAML). The env gained `extract_compose`/`extract_ci_yaml`,
-  `gold_compose`/`gold_ci_yaml`, `generate_tasks(kind="compose"|"ci-yaml")`,
-  `COMPOSE_SYSTEM_PROMPT`/`CI_YAML_SYSTEM_PROMPT`, and
-  `load_environment(artifact_kind=...)`. Verified per kind: gold passes its own
-  spec via the in-process static check **and** the inlined `local-py` harness
-  (0 parity mismatches), and `spec_gaming` fires on a trivial token-parroting
-  artifact — so the C3 reward-hacking signal extends to both new kinds.
-  Remaining M4 kinds (Terraform `validate`, k8s `kubeconform`) need external
-  CLIs; a genuine `docker compose up` verifier (vs the static stand-in) is also
-  future work.
+- **M4 — all declared `ArtifactKind`s wired end-to-end (static path).** Compose,
+  GitHub Actions CI-YAML, Terraform (HCL), and k8s (YAML) now join Dockerfile and
+  Python. The static checker is **kind-dispatched** (`verifier.smoke.checks.
+  check_artifact` + a per-kind harness builder); `check_compose`/`check_ci_yaml`/
+  `check_terraform`/`check_k8s` are stdlib-only heuristic stand-ins (no PyYAML/HCL
+  libs). The env gained per-kind `extract_*`, `gold_*`, `generate_tasks(kind=...)`,
+  `*_SYSTEM_PROMPT`s, and `load_environment(artifact_kind=...)`. Verified per kind:
+  gold passes its own spec via the in-process static check **and** the inlined
+  `local-py` harness (0 parity mismatches), and `spec_gaming` fires on a
+  token-parroting artifact. **The C3 study spans all kinds** —
+  `impossible_tasks(kind=...)` + `eval.c3_study.default_trials` grade gold-on-
+  impossible across every kind (gold always fails → 0 undeserved passes, verified).
+  Remaining M4: **genuine** verifiers (`docker compose up`, `terraform validate`,
+  `kubeconform`) — code is in-repo-testable via mocked hooks, but real runs need a
+  docker daemon / those CLIs.
 
 **Scaffolded but NOT yet executed (need real infra):**
 - A real GPU GRPO run (M1 "reward rises, ≥3 seeds").

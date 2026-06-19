@@ -210,7 +210,7 @@ def test_compose_unknown_kind_raises() -> None:
     import pytest
 
     with pytest.raises(ValueError):
-        infra_tasks.generate_tasks(kind="terraform")
+        infra_tasks.generate_tasks(kind="helm")
 
 
 # --- ci-yaml kind ----------------------------------------------------------
@@ -293,4 +293,158 @@ def test_dockerfile_and_compose_unchanged_by_ci_yaml_addition() -> None:
     # The ci-<base_id> suffix must equal the Dockerfile spec_id (same pool order).
     assert [t["info"]["spec_id"] for t in df] == [
         t["info"]["spec_id"].removeprefix("ci-") for t in ci
+    ]
+
+
+# --- terraform kind --------------------------------------------------------
+def test_terraform_task_shape_and_locked_smoke_keys() -> None:
+    tasks = infra_tasks.generate_tasks(n=12, seed=0, split="test", kind="terraform")
+    assert tasks
+    for t in tasks:
+        info = t["info"]
+        assert info["kind"] == ArtifactKind.TERRAFORM.value == "terraform"
+        assert info["spec_id"].startswith("tf-")
+        smoke = info["smoke"]
+        # Locked terraform smoke contract: must_contain + resource_type + port.
+        assert set(smoke) == {"must_contain", "resource_type", "port"}
+        assert smoke["must_contain"] == [
+            "terraform",
+            'provider "docker"',
+            'resource "docker_image"',
+            'resource "docker_container"',
+        ]
+        assert smoke["resource_type"] == "docker_container"
+        assert isinstance(smoke["port"], int)
+        # Terraform has no health probe in this stand-in.
+        assert "health_path" not in smoke
+
+
+def test_terraform_deterministic_for_seed() -> None:
+    a = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="terraform")
+    b = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="terraform")
+    assert [t["question"] for t in a] == [t["question"] for t in b]
+    assert [t["info"]["spec_id"] for t in a] == [t["info"]["spec_id"] for t in b]
+
+
+def test_terraform_ids_disjoint_from_other_kinds() -> None:
+    df = infra_tasks.generate_tasks(n=12, seed=0, split="train")
+    comp = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="compose")
+    ci = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="ci-yaml")
+    tf = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="terraform")
+    df_ids = {t["info"]["spec_id"] for t in df}
+    comp_ids = {t["info"]["spec_id"] for t in comp}
+    ci_ids = {t["info"]["spec_id"] for t in ci}
+    tf_ids = {t["info"]["spec_id"] for t in tf}
+    assert tf_ids.isdisjoint(df_ids)
+    assert tf_ids.isdisjoint(comp_ids)
+    assert tf_ids.isdisjoint(ci_ids)
+
+
+def test_terraform_build_verify_spec_kind() -> None:
+    tasks = infra_tasks.generate_tasks(n=6, seed=2, split="train", kind="terraform")
+    assert tasks
+    for t in tasks:
+        spec = infra_tasks.build_verify_spec(t["info"])
+        assert isinstance(spec, VerifySpec)
+        assert spec.kind is ArtifactKind.TERRAFORM
+        # No Dockerfile scaffold is attached on the terraform path.
+        assert "context_files" not in spec.smoke
+        assert spec.smoke["resource_type"] == "docker_container"
+        assert spec.smoke["port"] == t["info"]["smoke"]["port"]
+
+
+def test_terraform_system_prompt_constrains_output() -> None:
+    sp = infra_tasks.TERRAFORM_SYSTEM_PROMPT
+    assert "```hcl" in sp
+    assert "ONLY" in sp
+    assert "terraform" in sp
+    assert "<think>" in sp  # explicitly forbids think blocks
+
+
+# --- k8s kind --------------------------------------------------------------
+def test_k8s_task_shape_and_locked_smoke_keys() -> None:
+    tasks = infra_tasks.generate_tasks(n=12, seed=0, split="test", kind="k8s")
+    assert tasks
+    for t in tasks:
+        info = t["info"]
+        assert info["kind"] == ArtifactKind.K8S.value == "k8s"
+        assert info["spec_id"].startswith("k8s-")
+        smoke = info["smoke"]
+        # Locked k8s smoke contract.
+        assert set(smoke) == {"must_contain", "port", "health_path", "kinds_required"}
+        assert smoke["must_contain"] == [
+            "apiVersion:",
+            "kind: Deployment",
+            "kind: Service",
+            "containerPort:",
+        ]
+        assert isinstance(smoke["port"], int)
+        assert smoke["health_path"].startswith("/")
+        assert smoke["kinds_required"] == ["Deployment", "Service"]
+
+
+def test_k8s_deterministic_for_seed() -> None:
+    a = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="k8s")
+    b = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="k8s")
+    assert [t["question"] for t in a] == [t["question"] for t in b]
+    assert [t["info"]["spec_id"] for t in a] == [t["info"]["spec_id"] for t in b]
+
+
+def test_k8s_ids_disjoint_from_other_kinds() -> None:
+    df = infra_tasks.generate_tasks(n=12, seed=0, split="train")
+    comp = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="compose")
+    ci = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="ci-yaml")
+    tf = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="terraform")
+    k8s = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="k8s")
+    k8s_ids = {t["info"]["spec_id"] for t in k8s}
+    assert k8s_ids.isdisjoint({t["info"]["spec_id"] for t in df})
+    assert k8s_ids.isdisjoint({t["info"]["spec_id"] for t in comp})
+    assert k8s_ids.isdisjoint({t["info"]["spec_id"] for t in ci})
+    assert k8s_ids.isdisjoint({t["info"]["spec_id"] for t in tf})
+
+
+def test_k8s_build_verify_spec_kind() -> None:
+    tasks = infra_tasks.generate_tasks(n=6, seed=2, split="train", kind="k8s")
+    assert tasks
+    for t in tasks:
+        spec = infra_tasks.build_verify_spec(t["info"])
+        assert isinstance(spec, VerifySpec)
+        assert spec.kind is ArtifactKind.K8S
+        # No Dockerfile scaffold is attached on the k8s path.
+        assert "context_files" not in spec.smoke
+        assert spec.smoke["kinds_required"] == ["Deployment", "Service"]
+        assert spec.smoke["port"] == t["info"]["smoke"]["port"]
+
+
+def test_k8s_system_prompt_constrains_output() -> None:
+    sp = infra_tasks.K8S_SYSTEM_PROMPT
+    assert "```yaml" in sp
+    assert "ONLY" in sp
+    assert "apiVersion:" in sp
+    assert "<think>" in sp  # explicitly forbids think blocks
+
+
+def test_other_kinds_unchanged_by_terraform_k8s_addition() -> None:
+    # Adding terraform/k8s must not perturb the prior kinds' output.
+    df = infra_tasks.generate_tasks(n=10, seed=5, split="train")
+    df_explicit = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="dockerfile")
+    comp = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="compose")
+    ci = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="ci-yaml")
+    assert df == df_explicit
+    # terraform/k8s share the same split pool/order; only the artifact differs.
+    tf = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="terraform")
+    k8s = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="k8s")
+    df_lfd = [(t["info"]["language"], t["info"]["framework"], t["info"]["dependency"]) for t in df]
+    for other in (comp, ci, tf, k8s):
+        lfd = [
+            (t["info"]["language"], t["info"]["framework"], t["info"]["dependency"])
+            for t in other
+        ]
+        assert df_lfd == lfd
+    # The tf-/k8s- prefixed ids must map back to the Dockerfile spec_id (same order).
+    assert [t["info"]["spec_id"] for t in df] == [
+        t["info"]["spec_id"].removeprefix("tf-") for t in tf
+    ]
+    assert [t["info"]["spec_id"] for t in df] == [
+        t["info"]["spec_id"].removeprefix("k8s-") for t in k8s
     ]

@@ -99,3 +99,35 @@ def test_gold_ci_yaml_passes_static_check(task: dict) -> None:
     result = checks.check_ci_yaml(yml, spec)
     assert result["build_ok"] is True, result.get("reasons")
     assert result["smoke_ok"] is True, result.get("reasons")
+
+
+# --- terraform gold-passes-its-own-spec CRUX (multi-kind analog) -----------
+_TERRAFORM_SAMPLE = infra_tasks.generate_tasks(n=12, seed=0, split="test", kind="terraform")
+
+
+@pytest.mark.parametrize(
+    "task", _TERRAFORM_SAMPLE, ids=[t["info"]["spec_id"] for t in _TERRAFORM_SAMPLE]
+)
+def test_gold_terraform_passes_static_check(task: dict) -> None:
+    info = task["info"]
+    tf = infra_gold.gold_terraform(info)
+    spec = infra_tasks.build_verify_spec(info)
+    result = checks.check_terraform(tf, spec)
+    assert result["build_ok"] is True, result.get("reasons")
+    assert result["smoke_ok"] is True, result.get("reasons")
+
+
+# --- k8s gold-passes-its-own-spec CRUX (multi-kind analog) -----------------
+_K8S_SAMPLE = infra_tasks.generate_tasks(n=12, seed=0, split="test", kind="k8s")
+
+
+@pytest.mark.parametrize(
+    "task", _K8S_SAMPLE, ids=[t["info"]["spec_id"] for t in _K8S_SAMPLE]
+)
+def test_gold_k8s_passes_static_check(task: dict) -> None:
+    info = task["info"]
+    yml = infra_gold.gold_k8s(info)
+    spec = infra_tasks.build_verify_spec(info)
+    result = checks.check_k8s(yml, spec)
+    assert result["build_ok"] is True, result.get("reasons")
+    assert result["smoke_ok"] is True, result.get("reasons")

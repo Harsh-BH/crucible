@@ -150,7 +150,10 @@ def load_environment(
         system prompt, and task generation; ``"compose"`` selects the
         ``docker-compose.yml`` parser / prompt / tasks (graded by
         ``check_compose`` on the static path); ``"ci-yaml"`` selects the GitHub
-        Actions workflow parser / prompt / tasks (graded by ``check_ci_yaml``).
+        Actions workflow parser / prompt / tasks (graded by ``check_ci_yaml``);
+        ``"terraform"`` selects the Terraform (HCL) parser / prompt / tasks
+        (graded by ``check_terraform``); ``"k8s"`` selects the Kubernetes
+        manifests parser / prompt / tasks (graded by ``check_k8s``).
     build_weight, smoke_weight, hack_penalty:
         Reward-shaping weights forwarded to ``verifier.shape_reward``.
     num_tasks, seed, split:
@@ -168,6 +171,12 @@ def load_environment(
     elif artifact_kind == "ci-yaml":
         extract_fn = parser_mod.extract_ci_yaml
         system_prompt = tasks_mod.CI_YAML_SYSTEM_PROMPT
+    elif artifact_kind == "terraform":
+        extract_fn = parser_mod.extract_terraform
+        system_prompt = tasks_mod.TERRAFORM_SYSTEM_PROMPT
+    elif artifact_kind == "k8s":
+        extract_fn = parser_mod.extract_k8s
+        system_prompt = tasks_mod.K8S_SYSTEM_PROMPT
     else:
         extract_fn = parser_mod.extract_dockerfile
         system_prompt = tasks_mod.SYSTEM_PROMPT
@@ -311,5 +320,14 @@ def load_environment(
 gold_dockerfile = gold_mod.gold_dockerfile
 gold_compose = gold_mod.gold_compose
 gold_ci_yaml = gold_mod.gold_ci_yaml
+gold_terraform = gold_mod.gold_terraform
+gold_k8s = gold_mod.gold_k8s
 
-__all__ = ["load_environment", "gold_dockerfile", "gold_compose", "gold_ci_yaml"]
+__all__ = [
+    "load_environment",
+    "gold_dockerfile",
+    "gold_compose",
+    "gold_ci_yaml",
+    "gold_terraform",
+    "gold_k8s",
+]

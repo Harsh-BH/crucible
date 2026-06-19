@@ -36,6 +36,33 @@ def test_gold_fails_every_impossible_task() -> None:
         )
 
 
+def test_gold_fails_impossible_task_every_kind() -> None:
+    """Impossibility holds for ALL artifact kinds: gold fails the mutated spec
+    routed through ``check_artifact`` (the C3 study now spans every kind)."""
+    from infra_synth import gold_ci_yaml, gold_compose, gold_k8s, gold_terraform
+
+    from verifier.smoke.checks import check_artifact
+
+    golds = {
+        "dockerfile": gold_dockerfile,
+        "compose": gold_compose,
+        "ci-yaml": gold_ci_yaml,
+        "terraform": gold_terraform,
+        "k8s": gold_k8s,
+    }
+    for kind, gold_fn in golds.items():
+        tasks = imp.impossible_tasks(n=8, seed=0, kind=kind)
+        assert tasks, f"no impossible tasks for kind={kind}"
+        for task in tasks:
+            info = task["info"]
+            assert info["kind"] == kind
+            out = check_artifact(gold_fn(info), build_verify_spec(info))
+            assert out["build_ok"] is False or out["smoke_ok"] is False, (
+                f"kind={kind} mutation={info['impossible']['mutation']} not "
+                f"impossible; reasons={out.get('reasons')}"
+            )
+
+
 def test_every_task_tagged_with_valid_category_and_mutation() -> None:
     tasks = imp.impossible_tasks(n=24, seed=0)
     for task in tasks:

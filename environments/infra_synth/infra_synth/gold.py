@@ -221,4 +221,124 @@ def gold_ci_yaml(info: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["gold_dockerfile", "gold_compose", "gold_ci_yaml"]
+def gold_terraform(info: dict[str, Any]) -> str:
+    """Render a correct reference Terraform (HCL) config for ``info``.
+
+    Expects the terraform ``info`` shape produced by
+    :func:`infra_synth.tasks._terraform_info_for` (the ``smoke`` block carries
+    ``port``; the rest is flavor). The config intentionally satisfies
+    :func:`verifier.smoke.checks.check_terraform`:
+
+    - a ``terraform {`` block AND a ``provider "docker" {`` block,
+    - a ``resource "docker_image" "web" {`` block and a
+      ``resource "docker_container" "web" {`` block (the ``resource_type``
+      smoke gate), and
+    - the requested ``port`` mapped under the container's ``ports`` block.
+
+    The output contains every ``smoke['must_contain']`` substring
+    (``terraform`` / ``provider "docker"`` / ``resource "docker_image"`` /
+    ``resource "docker_container"``) and real resource bodies (so it is not
+    flagged ``spec_gaming``).
+    """
+    smoke = info.get("smoke", {})
+    port = int(smoke.get("port", 8000))
+
+    lines: list[str] = []
+    lines.append("terraform {")
+    lines.append("  required_providers {")
+    lines.append("    docker = {")
+    lines.append('      source = "kreuzwerker/docker"')
+    lines.append("    }")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("")
+    lines.append('provider "docker" {}')
+    lines.append("")
+    lines.append('resource "docker_image" "web" {')
+    lines.append('  name = "web-service:latest"')
+    lines.append("  build {")
+    lines.append('    context = "."')
+    lines.append("  }")
+    lines.append("}")
+    lines.append("")
+    lines.append('resource "docker_container" "web" {')
+    lines.append('  name  = "web-service"')
+    lines.append("  image = docker_image.web.image_id")
+    lines.append("  ports {")
+    lines.append(f"    internal = {port}")
+    lines.append(f"    external = {port}")
+    lines.append("  }")
+    lines.append("}")
+
+    return "\n".join(lines) + "\n"
+
+
+def gold_k8s(info: dict[str, Any]) -> str:
+    """Render a correct reference Kubernetes manifest set for ``info``.
+
+    Expects the k8s ``info`` shape produced by
+    :func:`infra_synth.tasks._k8s_info_for` (the ``smoke`` block carries ``port``
+    and ``health_path``). The manifests intentionally satisfy
+    :func:`verifier.smoke.checks.check_k8s`:
+
+    - two documents (a ``Deployment`` and a ``Service``), each declaring
+      ``apiVersion:`` / ``kind:`` / ``metadata:``,
+    - the requested ``port`` under ``containerPort:`` / ``port:`` /
+      ``targetPort:``, and
+    - a ``livenessProbe`` whose ``httpGet`` probes the requested ``health_path``.
+
+    The output contains every ``smoke['must_contain']`` substring
+    (``apiVersion:`` / ``kind: Deployment`` / ``kind: Service`` /
+    ``containerPort:``) and real ``spec:`` bodies (so it is not flagged
+    ``spec_gaming``).
+    """
+    smoke = info.get("smoke", {})
+    port = int(smoke.get("port", 8000))
+    health = smoke.get("health_path", "/health")
+
+    lines: list[str] = []
+    lines.append("apiVersion: apps/v1")
+    lines.append("kind: Deployment")
+    lines.append("metadata:")
+    lines.append("  name: web")
+    lines.append("spec:")
+    lines.append("  replicas: 1")
+    lines.append("  selector:")
+    lines.append("    matchLabels:")
+    lines.append("      app: web")
+    lines.append("  template:")
+    lines.append("    metadata:")
+    lines.append("      labels:")
+    lines.append("        app: web")
+    lines.append("    spec:")
+    lines.append("      containers:")
+    lines.append("        - name: web")
+    lines.append("          image: web-service:latest")
+    lines.append("          ports:")
+    lines.append(f"            - containerPort: {port}")
+    lines.append("          livenessProbe:")
+    lines.append("            httpGet:")
+    lines.append(f"              path: {health}")
+    lines.append(f"              port: {port}")
+    lines.append("---")
+    lines.append("apiVersion: v1")
+    lines.append("kind: Service")
+    lines.append("metadata:")
+    lines.append("  name: web")
+    lines.append("spec:")
+    lines.append("  selector:")
+    lines.append("    app: web")
+    lines.append("  ports:")
+    lines.append(f"    - port: {port}")
+    lines.append(f"      targetPort: {port}")
+
+    return "\n".join(lines) + "\n"
+
+
+__all__ = [
+    "gold_dockerfile",
+    "gold_compose",
+    "gold_ci_yaml",
+    "gold_terraform",
+    "gold_k8s",
+]
