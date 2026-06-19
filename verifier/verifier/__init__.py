@@ -10,13 +10,19 @@ PUBLIC API
 - ``get_verifier(name, ...)``  : factory -> a backend implementing ``Verifier``.
                                  Names: ``static`` | ``local-py`` |
                                  ``local-docker`` | ``local-compose`` |
-                                 ``sentinel``.
+                                 ``local-terraform`` | ``local-k8s`` | ``local``
+                                 | ``sentinel``.
 - ``verifier.backends``        : ``StaticVerifier`` (in-process static analysis,
                                  the fallback), ``LocalPyVerifier`` (weak local
                                  subprocess baseline), ``LocalDockerVerifier``
                                  (genuine build + smoke probe),
                                  ``LocalComposeVerifier`` (genuine ``docker
-                                 compose up`` + smoke probe).
+                                 compose up`` + smoke probe),
+                                 ``LocalTerraformVerifier`` (genuine ``terraform
+                                 init`` + ``validate``), ``LocalK8sVerifier``
+                                 (genuine ``kubeconform`` validation),
+                                 ``LocalGenuineVerifier`` (kind-aware dispatcher
+                                 over the genuine backends).
 - ``verifier.sentinel_client`` : ``SentinelClient`` (async HTTP client for the
                                  Sentinel sandbox) + ``SentinelVerifier`` (the
                                  hardened execution path).
@@ -50,7 +56,10 @@ from __future__ import annotations
 from .backends import (
     LocalComposeVerifier,
     LocalDockerVerifier,
+    LocalGenuineVerifier,
+    LocalK8sVerifier,
     LocalPyVerifier,
+    LocalTerraformVerifier,
     StaticVerifier,
     get_verifier,
 )
@@ -89,6 +98,9 @@ __all__ = [
     "LocalPyVerifier",
     "LocalDockerVerifier",
     "LocalComposeVerifier",
+    "LocalTerraformVerifier",
+    "LocalK8sVerifier",
+    "LocalGenuineVerifier",
     "SentinelClient",
     "SentinelVerifier",
     # reward shaping

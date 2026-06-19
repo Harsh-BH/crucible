@@ -15,6 +15,14 @@ Backends span Crucible's weak->hardened execution axis:
 ``local-compose`` :class:`LocalComposeVerifier` -- GENUINE ``docker compose up
                --build`` + HTTP health probe (the eval verifier for
                :attr:`ArtifactKind.COMPOSE`).
+``local-terraform`` :class:`LocalTerraformVerifier` -- GENUINE ``terraform init``
+               + ``terraform validate`` (validation-only; the eval verifier for
+               :attr:`ArtifactKind.TERRAFORM`).
+``local-k8s``  :class:`LocalK8sVerifier` -- GENUINE ``kubeconform -strict``
+               schema validation (validation-only; the eval verifier for
+               :attr:`ArtifactKind.K8S`).
+``local``      :class:`LocalGenuineVerifier` -- kind-aware dispatcher routing
+               each artifact to its genuine backend by :attr:`VerifySpec.kind`.
 ``sentinel``   :class:`verifier.sentinel_client.SentinelVerifier` -- the same
                harness submitted to the hardened nsjail/cgroups sandbox.
 ============   =============================================================
@@ -48,6 +56,9 @@ __all__ = [
     "LocalPyVerifier",
     "LocalDockerVerifier",
     "LocalComposeVerifier",
+    "LocalTerraformVerifier",
+    "LocalK8sVerifier",
+    "LocalGenuineVerifier",
     "get_verifier",
 ]
 
@@ -648,6 +659,301 @@ class LocalComposeVerifier:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _write_context_files(tmpdir: str, smoke: dict) -> None:
+    """Write ``smoke['context_files']`` into ``tmpdir`` with a traversal guard.
+
+    Maps POSIX-relative paths -> contents; each destination must stay inside
+    ``tmpdir`` (guard against ``..`` traversal), mirroring the docker/compose
+    verifiers' build-context writer.
+    """
+    for relpath, content in (smoke.get("context_files") or {}).items():
+        dest = os.path.normpath(os.path.join(tmpdir, relpath))
+        if dest != tmpdir and not dest.startswith(tmpdir + os.sep):
+            raise ValueError(f"context_files path escapes build context: {relpath!r}")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(content if isinstance(content, str) else str(content))
+
+
+# ---------------------------------------------------------------------------
+# LocalTerraformVerifier
+# ---------------------------------------------------------------------------
+class LocalTerraformVerifier:
+    """Genuine ``terraform init`` + ``terraform validate`` (validation-only).
+
+    ``name='local-terraform'``. The real (non-static) eval verifier for
+    :attr:`ArtifactKind.TERRAFORM`. Terraform ``validate`` checks configuration
+    consistency without provisioning anything, so there is no HTTP "smoke"
+    step -- validity *is* the check: a config that ``init``s and ``validate``s
+    cleanly sets ``build_ok=smoke_ok=True``.
+
+    Flow: write the artifact as ``main.tf`` (plus any ``spec.smoke[
+    "context_files"]``) to a temp dir, run ``terraform init -input=false
+    -no-color`` then ``terraform validate -no-color`` there, map the outcome,
+    and remove the temp dir.
+
+    If the ``terraform`` CLI is unavailable, :meth:`verify` returns
+    ``VerifyResult(build_ok=False, status='terraform-unavailable')`` (it never
+    raises). All blocking work runs via :func:`asyncio.to_thread`.
+
+    The init/validate steps are factored into overridable hooks
+    (:meth:`_tf_init`, :meth:`_tf_validate`) so result mapping can be
+    unit-tested without a real CLI.
+    """
+
+    name = "local-terraform"
+
+    def __init__(
+        self,
+        *,
+        time_limit_ms: int | None = None,
+        terraform_exe: str = "terraform",
+    ) -> None:
+        self.time_limit_ms = time_limit_ms
+        self.terraform_exe = terraform_exe
+
+    def _terraform_available(self) -> bool:
+        return shutil.which(self.terraform_exe) is not None
+
+    async def verify(self, artifact: str, spec: VerifySpec) -> VerifyResult:
+        if not self._terraform_available():
+            return VerifyResult(
+                backend=self.name,
+                status="terraform-unavailable",
+                build_ok=False,
+                stderr_tail="terraform CLI not found on PATH",
+            )
+        return await asyncio.to_thread(self._run_blocking, artifact, spec)
+
+    # -- overridable hooks (for testing) -----------------------------------
+    def _tf_init(self, ctx: str, timeout_s: float) -> subprocess.CompletedProcess:
+        cmd = [self.terraform_exe, "init", "-input=false", "-no-color"]
+        return subprocess.run(
+            cmd, cwd=ctx, capture_output=True, text=True, timeout=timeout_s, check=False
+        )
+
+    def _tf_validate(self, ctx: str, timeout_s: float) -> subprocess.CompletedProcess:
+        cmd = [self.terraform_exe, "validate", "-no-color"]
+        return subprocess.run(
+            cmd, cwd=ctx, capture_output=True, text=True, timeout=timeout_s, check=False
+        )
+
+    # -- orchestration ------------------------------------------------------
+    def _run_blocking(self, artifact: str, spec: VerifySpec) -> VerifyResult:
+        result = VerifyResult(backend=self.name)
+        limits = spec.limits
+        smoke = spec.smoke or {}
+        # ``init`` downloads providers over the network: give it room.
+        timeout_s = (
+            self.time_limit_ms / 1000.0
+            if self.time_limit_ms is not None
+            else max(120.0, float(limits.wall_s) * 8.0)
+        )
+
+        t0 = time.monotonic()
+        tmpdir = tempfile.mkdtemp(prefix="crucible-tf-")
+        try:
+            with open(os.path.join(tmpdir, "main.tf"), "w", encoding="utf-8") as fh:
+                fh.write(artifact or "")
+            _write_context_files(tmpdir, smoke)
+
+            # --- init ---------------------------------------------------
+            try:
+                init = self._tf_init(tmpdir, timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                result.status = "terraform-timeout"
+                result.stdout_tail = _tail(exc.stdout)
+                result.stderr_tail = _tail(exc.stderr)
+                result.hack_flags.timed_out = True
+                result.hack_flags.resource_exhaustion = True
+                result.wall_s = time.monotonic() - t0
+                return result
+
+            result.exit_code = init.returncode
+            result.stdout_tail = _tail(init.stdout)
+            if init.returncode != 0:
+                result.status = "init-failed"
+                result.stderr_tail = _tail(init.stderr)
+                result.wall_s = time.monotonic() - t0
+                return result
+
+            # --- validate -----------------------------------------------
+            try:
+                validate = self._tf_validate(tmpdir, timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                result.status = "terraform-timeout"
+                result.stdout_tail = _tail(exc.stdout)
+                result.stderr_tail = _tail(exc.stderr)
+                result.hack_flags.timed_out = True
+                result.hack_flags.resource_exhaustion = True
+                result.wall_s = time.monotonic() - t0
+                return result
+
+            result.exit_code = validate.returncode
+            result.stdout_tail = _tail(validate.stdout)
+            if validate.returncode == 0:
+                result.build_ok = True
+                result.smoke_ok = True
+                result.status = "validated"
+            else:
+                result.build_ok = False
+                result.smoke_ok = False
+                result.status = "validate-failed"
+                result.stderr_tail = _tail(validate.stderr)
+            result.wall_s = time.monotonic() - t0
+            return result
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# LocalK8sVerifier
+# ---------------------------------------------------------------------------
+class LocalK8sVerifier:
+    """Genuine ``kubeconform -strict`` schema validation (validation-only).
+
+    ``name='local-k8s'``. The real (non-static) eval verifier for
+    :attr:`ArtifactKind.K8S`: writes the artifact to a temp ``manifests.yaml``
+    and validates it against the Kubernetes JSON schemas with ``kubeconform``.
+    No cluster is involved -- schema validity *is* the check, so a manifest that
+    passes sets ``build_ok=smoke_ok=True``.
+
+    If the ``kubeconform`` CLI is unavailable, :meth:`verify` returns
+    ``VerifyResult(build_ok=False, status='kubeconform-unavailable')`` (it never
+    raises). All blocking work runs via :func:`asyncio.to_thread`.
+
+    The validation step is a single overridable hook (:meth:`_kubeconform`) so
+    result mapping can be unit-tested without a real CLI.
+    """
+
+    name = "local-k8s"
+
+    def __init__(
+        self,
+        *,
+        kubeconform_exe: str = "kubeconform",
+        strict: bool = True,
+    ) -> None:
+        self.kubeconform_exe = kubeconform_exe
+        self.strict = strict
+
+    def _kubeconform_available(self) -> bool:
+        return shutil.which(self.kubeconform_exe) is not None
+
+    async def verify(self, artifact: str, spec: VerifySpec) -> VerifyResult:
+        if not self._kubeconform_available():
+            return VerifyResult(
+                backend=self.name,
+                status="kubeconform-unavailable",
+                build_ok=False,
+                stderr_tail="kubeconform CLI not found on PATH",
+            )
+        return await asyncio.to_thread(self._run_blocking, artifact, spec)
+
+    # -- overridable hook (for testing) ------------------------------------
+    def _kubeconform(self, path: str, timeout_s: float) -> subprocess.CompletedProcess:
+        cmd = [self.kubeconform_exe]
+        if self.strict:
+            cmd.append("-strict")
+        cmd += ["-summary", path]
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout_s, check=False
+        )
+
+    # -- orchestration ------------------------------------------------------
+    def _run_blocking(self, artifact: str, spec: VerifySpec) -> VerifyResult:
+        result = VerifyResult(backend=self.name)
+        limits = spec.limits
+        timeout_s = max(60.0, float(limits.wall_s) * 4.0)
+
+        t0 = time.monotonic()
+        tmpdir = tempfile.mkdtemp(prefix="crucible-k8s-")
+        try:
+            path = os.path.join(tmpdir, "manifests.yaml")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(artifact or "")
+
+            try:
+                proc = self._kubeconform(path, timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                result.status = "k8s-timeout"
+                result.stdout_tail = _tail(exc.stdout)
+                result.stderr_tail = _tail(exc.stderr)
+                result.hack_flags.timed_out = True
+                result.hack_flags.resource_exhaustion = True
+                result.wall_s = time.monotonic() - t0
+                return result
+
+            result.exit_code = proc.returncode
+            result.stdout_tail = _tail(proc.stdout)
+            result.stderr_tail = _tail(proc.stderr)
+            ok = proc.returncode == 0
+            result.build_ok = ok
+            result.smoke_ok = ok
+            result.status = "validated" if ok else "invalid"
+            result.wall_s = time.monotonic() - t0
+            return result
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# LocalGenuineVerifier (kind-aware dispatcher)
+# ---------------------------------------------------------------------------
+class LocalGenuineVerifier:
+    """Kind-aware dispatcher over the genuine local backends. ``name='local'``.
+
+    Routes each artifact to its genuine backend *by* :attr:`VerifySpec.kind` at
+    verify time, so a mixed-kind eval set grades correctly behind one backend:
+
+    - :attr:`ArtifactKind.DOCKERFILE` -> :class:`LocalDockerVerifier`
+    - :attr:`ArtifactKind.COMPOSE`    -> :class:`LocalComposeVerifier`
+    - :attr:`ArtifactKind.TERRAFORM`  -> :class:`LocalTerraformVerifier`
+    - :attr:`ArtifactKind.K8S`        -> :class:`LocalK8sVerifier`
+    - :attr:`ArtifactKind.PYTHON`     -> :class:`LocalPyVerifier`
+    - anything else                   -> :class:`StaticVerifier`
+
+    Per-kind verifiers are constructed lazily and cached. The ``time_limit_ms`` /
+    ``mem_mb`` knobs are forwarded to the docker/compose/py sub-verifiers (the
+    terraform/k8s/static backends do not take ``mem_mb``).
+    """
+
+    name = "local"
+
+    def __init__(
+        self,
+        *,
+        time_limit_ms: int | None = None,
+        mem_mb: int | None = None,
+    ) -> None:
+        self.time_limit_ms = time_limit_ms
+        self.mem_mb = mem_mb
+        self._cache: dict[ArtifactKind, Verifier] = {}
+
+    def _sub_for(self, kind: ArtifactKind) -> Verifier:
+        sub = self._cache.get(kind)
+        if sub is not None:
+            return sub
+        if kind == ArtifactKind.DOCKERFILE:
+            sub = LocalDockerVerifier(time_limit_ms=self.time_limit_ms, mem_mb=self.mem_mb)
+        elif kind == ArtifactKind.COMPOSE:
+            sub = LocalComposeVerifier(time_limit_ms=self.time_limit_ms, mem_mb=self.mem_mb)
+        elif kind == ArtifactKind.TERRAFORM:
+            sub = LocalTerraformVerifier(time_limit_ms=self.time_limit_ms)
+        elif kind == ArtifactKind.K8S:
+            sub = LocalK8sVerifier()
+        elif kind == ArtifactKind.PYTHON:
+            sub = LocalPyVerifier(time_limit_ms=self.time_limit_ms, mem_mb=self.mem_mb)
+        else:
+            sub = StaticVerifier()
+        self._cache[kind] = sub
+        return sub
+
+    async def verify(self, artifact: str, spec: VerifySpec) -> VerifyResult:
+        sub = self._sub_for(spec.kind)
+        return await sub.verify(artifact, spec)
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
@@ -662,9 +968,10 @@ def get_verifier(
     """Construct a verifier backend by ``name``.
 
     ``name`` in ``{"static", "local-py", "local-docker", "local-compose",
-    "sentinel"}``. Extra ``kwargs`` are forwarded to the backend constructor.
-    ``base_url`` is used by ``sentinel``. Raises :class:`ValueError` on an
-    unknown name.
+    "local-terraform", "local-k8s", "local", "sentinel"}``. Extra ``kwargs`` are
+    forwarded to the backend constructor. ``base_url`` is used by ``sentinel``.
+    ``local`` is the kind-aware dispatcher (:class:`LocalGenuineVerifier`).
+    Raises :class:`ValueError` on an unknown name.
 
     ``verifier.sentinel_client`` is imported lazily so ``import verifier`` stays
     cheap and never requires a running Sentinel.
@@ -683,6 +990,16 @@ def get_verifier(
         return LocalComposeVerifier(
             time_limit_ms=time_limit_ms, mem_mb=mem_mb, **kwargs  # type: ignore[arg-type]
         )
+    if name == "local-terraform":
+        return LocalTerraformVerifier(
+            time_limit_ms=time_limit_ms, **kwargs  # type: ignore[arg-type]
+        )
+    if name == "local-k8s":
+        return LocalK8sVerifier(**kwargs)  # type: ignore[arg-type]
+    if name == "local":
+        return LocalGenuineVerifier(
+            time_limit_ms=time_limit_ms, mem_mb=mem_mb, **kwargs  # type: ignore[arg-type]
+        )
     if name == "sentinel":
         from .sentinel_client import SentinelVerifier  # lazy
 
@@ -692,5 +1009,6 @@ def get_verifier(
         return SentinelVerifier(**kw)  # type: ignore[arg-type]
     raise ValueError(
         f"unknown verifier name {name!r}; expected one of "
-        "'static', 'local-py', 'local-docker', 'local-compose', 'sentinel'"
+        "'static', 'local-py', 'local-docker', 'local-compose', "
+        "'local-terraform', 'local-k8s', 'local', 'sentinel'"
     )

@@ -63,8 +63,18 @@
   for FastAPI + Flask **builds + serves health → 200**; a path the server doesn't
   serve correctly yields `smoke_ok=False` (the probe discriminates). The existing
   `local-docker` Dockerfile verifier was re-confirmed end-to-end the same way.
-  Remaining genuine verifiers: `terraform validate`, `kubeconform` — need those
-  CLIs (heuristic stand-ins exist today).
+- **M4 — genuine verifiers for EVERY runnable kind + a kind-aware dispatcher.**
+  `LocalTerraformVerifier` (`terraform init` + `terraform validate`),
+  `LocalK8sVerifier` (`kubeconform -strict`), and `LocalGenuineVerifier`
+  (`get_verifier("local")`) which routes each artifact to its genuine backend by
+  `spec.kind` (dockerfile→docker, compose→compose, terraform→terraform,
+  k8s→kubeconform, python→local-py, ci-yaml→static fallback — no genuine CI
+  runner without `act`). **Verified live** (Docker 29.4.2, Terraform 1.9.8,
+  kubeconform 0.6.7): one `get_verifier("local")` graded gold for all kinds —
+  dockerfile/compose **build+serve→200**, terraform **validated**, k8s
+  **validated** — all real tools, 0 failures; the env/eval grade every kind
+  genuinely via `verifier_backend="local"`. Each backend degrades gracefully to
+  an "unavailable" result when its CLI is absent (so CI stays green).
 
 **Scaffolded but NOT yet executed (need real infra):**
 - A real GPU GRPO run (M1 "reward rises, ≥3 seeds").

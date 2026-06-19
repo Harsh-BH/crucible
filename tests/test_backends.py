@@ -10,7 +10,10 @@ import pytest
 from verifier import (
     LocalComposeVerifier,
     LocalDockerVerifier,
+    LocalGenuineVerifier,
+    LocalK8sVerifier,
     LocalPyVerifier,
+    LocalTerraformVerifier,
     SentinelVerifier,
     StaticVerifier,
     Verifier,
@@ -310,6 +313,9 @@ def test_factory_types() -> None:
     assert isinstance(get_verifier("local-py"), LocalPyVerifier)
     assert isinstance(get_verifier("local-docker"), LocalDockerVerifier)
     assert isinstance(get_verifier("local-compose"), LocalComposeVerifier)
+    assert isinstance(get_verifier("local-terraform"), LocalTerraformVerifier)
+    assert isinstance(get_verifier("local-k8s"), LocalK8sVerifier)
+    assert isinstance(get_verifier("local"), LocalGenuineVerifier)
     assert isinstance(get_verifier("sentinel"), SentinelVerifier)
     # default
     assert isinstance(get_verifier(), StaticVerifier)
@@ -338,7 +344,10 @@ def test_factory_unknown_raises() -> None:
 
 
 def test_factory_returns_protocol() -> None:
-    for name in ("static", "local-py", "local-docker", "local-compose", "sentinel"):
+    for name in (
+        "static", "local-py", "local-docker", "local-compose",
+        "local-terraform", "local-k8s", "local", "sentinel",
+    ):
         assert isinstance(get_verifier(name), Verifier)
         assert get_verifier(name).name == name
 
@@ -529,3 +538,260 @@ async def test_local_compose_context_files_traversal_guard(monkeypatch) -> None:
     with pytest.raises(ValueError, match="escapes build context"):
         await v.verify(GOOD_COMPOSE, spec)
     assert down.get("hit") is True  # teardown still ran in finally
+
+
+# --- spec helpers + sample artifacts for terraform/k8s ----------------------
+GOOD_TERRAFORM = """\
+terraform {
+  required_providers {
+    null = {
+      source = "hashicorp/null"
+    }
+  }
+}
+
+resource "null_resource" "noop" {}
+"""
+
+GOOD_K8S = """\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+"""
+
+
+def _tf_spec(**smoke) -> VerifySpec:
+    return VerifySpec(
+        spec_id="t-tf",
+        kind=ArtifactKind.TERRAFORM,
+        smoke=smoke,
+        limits=ResourceLimits(wall_s=10, mem_mb=256),
+    )
+
+
+def _k8s_spec(**smoke) -> VerifySpec:
+    return VerifySpec(
+        spec_id="t-k8s",
+        kind=ArtifactKind.K8S,
+        smoke=smoke,
+        limits=ResourceLimits(wall_s=10, mem_mb=256),
+    )
+
+
+# --- LocalTerraformVerifier: mapping unit-tested with faked hooks ----------
+async def test_local_terraform_unavailable(monkeypatch) -> None:
+    v = LocalTerraformVerifier()
+    monkeypatch.setattr(v, "_terraform_available", lambda: False)
+    res = await v.verify(GOOD_TERRAFORM, _tf_spec())
+    assert res.backend == "local-terraform"
+    assert res.status == "terraform-unavailable"
+    assert res.build_ok is False
+    assert res.stderr_tail == "terraform CLI not found on PATH"
+
+
+async def test_local_terraform_validated_mapping(monkeypatch) -> None:
+    v = LocalTerraformVerifier()
+    monkeypatch.setattr(v, "_terraform_available", lambda: True)
+    monkeypatch.setattr(v, "_tf_init", lambda *a, **k: _ok_proc("initialized"))
+    monkeypatch.setattr(v, "_tf_validate", lambda *a, **k: _ok_proc("Success!"))
+    res = await v.verify(GOOD_TERRAFORM, _tf_spec())
+    assert res.build_ok is True
+    assert res.smoke_ok is True
+    assert res.status == "validated"
+    assert res.exit_code == 0
+
+
+async def test_local_terraform_validate_failed_mapping(monkeypatch) -> None:
+    v = LocalTerraformVerifier()
+    monkeypatch.setattr(v, "_terraform_available", lambda: True)
+    monkeypatch.setattr(v, "_tf_init", lambda *a, **k: _ok_proc("initialized"))
+    monkeypatch.setattr(v, "_tf_validate", lambda *a, **k: _ok_proc("", "Error: bad", rc=1))
+    res = await v.verify(GOOD_TERRAFORM, _tf_spec())
+    assert res.build_ok is False
+    assert res.smoke_ok is False
+    assert res.status == "validate-failed"
+    assert res.exit_code == 1
+    assert "Error: bad" in res.stderr_tail
+
+
+async def test_local_terraform_init_failed_mapping(monkeypatch) -> None:
+    v = LocalTerraformVerifier()
+    monkeypatch.setattr(v, "_terraform_available", lambda: True)
+    monkeypatch.setattr(v, "_tf_init", lambda *a, **k: _ok_proc("", "no providers", rc=1))
+    # validate must never run if init failed.
+    monkeypatch.setattr(
+        v, "_tf_validate", lambda *a, **k: pytest.fail("validate ran despite init failure")
+    )
+    res = await v.verify(GOOD_TERRAFORM, _tf_spec())
+    assert res.build_ok is False
+    assert res.smoke_ok is False
+    assert res.status == "init-failed"
+    assert res.exit_code == 1
+
+
+async def test_local_terraform_init_timeout_mapping(monkeypatch) -> None:
+    v = LocalTerraformVerifier()
+    monkeypatch.setattr(v, "_terraform_available", lambda: True)
+
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="terraform init", timeout=1)
+
+    monkeypatch.setattr(v, "_tf_init", timeout)
+    res = await v.verify(GOOD_TERRAFORM, _tf_spec())
+    assert res.status == "terraform-timeout"
+    assert res.hack_flags.timed_out is True
+    assert res.hack_flags.resource_exhaustion is True
+
+
+async def test_local_terraform_validate_timeout_mapping(monkeypatch) -> None:
+    v = LocalTerraformVerifier()
+    monkeypatch.setattr(v, "_terraform_available", lambda: True)
+    monkeypatch.setattr(v, "_tf_init", lambda *a, **k: _ok_proc("initialized"))
+
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="terraform validate", timeout=1)
+
+    monkeypatch.setattr(v, "_tf_validate", timeout)
+    res = await v.verify(GOOD_TERRAFORM, _tf_spec())
+    assert res.status == "terraform-timeout"
+    assert res.hack_flags.timed_out is True
+    assert res.hack_flags.resource_exhaustion is True
+
+
+async def test_local_terraform_context_files_traversal_guard(monkeypatch) -> None:
+    v = LocalTerraformVerifier()
+    monkeypatch.setattr(v, "_terraform_available", lambda: True)
+    monkeypatch.setattr(
+        v, "_tf_init", lambda *a, **k: pytest.fail("init reached despite bad path")
+    )
+    spec = _tf_spec(context_files={"../evil.tf": "x"})
+    with pytest.raises(ValueError, match="escapes build context"):
+        await v.verify(GOOD_TERRAFORM, spec)
+
+
+# --- LocalK8sVerifier: mapping unit-tested with faked hook -----------------
+async def test_local_k8s_unavailable(monkeypatch) -> None:
+    v = LocalK8sVerifier()
+    monkeypatch.setattr(v, "_kubeconform_available", lambda: False)
+    res = await v.verify(GOOD_K8S, _k8s_spec())
+    assert res.backend == "local-k8s"
+    assert res.status == "kubeconform-unavailable"
+    assert res.build_ok is False
+    assert res.stderr_tail == "kubeconform CLI not found on PATH"
+
+
+async def test_local_k8s_validated_mapping(monkeypatch) -> None:
+    v = LocalK8sVerifier()
+    monkeypatch.setattr(v, "_kubeconform_available", lambda: True)
+    monkeypatch.setattr(v, "_kubeconform", lambda *a, **k: _ok_proc("Valid: 1"))
+    res = await v.verify(GOOD_K8S, _k8s_spec())
+    assert res.build_ok is True
+    assert res.smoke_ok is True
+    assert res.status == "validated"
+    assert res.exit_code == 0
+
+
+async def test_local_k8s_invalid_mapping(monkeypatch) -> None:
+    v = LocalK8sVerifier()
+    monkeypatch.setattr(v, "_kubeconform_available", lambda: True)
+    monkeypatch.setattr(v, "_kubeconform", lambda *a, **k: _ok_proc("", "invalid", rc=1))
+    res = await v.verify(GOOD_K8S, _k8s_spec())
+    assert res.build_ok is False
+    assert res.smoke_ok is False
+    assert res.status == "invalid"
+    assert res.exit_code == 1
+
+
+async def test_local_k8s_timeout_mapping(monkeypatch) -> None:
+    v = LocalK8sVerifier()
+    monkeypatch.setattr(v, "_kubeconform_available", lambda: True)
+
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="kubeconform", timeout=1)
+
+    monkeypatch.setattr(v, "_kubeconform", timeout)
+    res = await v.verify(GOOD_K8S, _k8s_spec())
+    assert res.status == "k8s-timeout"
+    assert res.hack_flags.timed_out is True
+    assert res.hack_flags.resource_exhaustion is True
+
+
+async def test_local_k8s_non_strict_omits_flag(monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(cmd, *a, **k):
+        seen["cmd"] = cmd
+        return _ok_proc("Valid")
+
+    v = LocalK8sVerifier(strict=False)
+    monkeypatch.setattr(v, "_kubeconform_available", lambda: True)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    res = await v.verify(GOOD_K8S, _k8s_spec())
+    assert res.status == "validated"
+    assert "-strict" not in seen["cmd"]
+
+
+# --- LocalGenuineVerifier: kind-aware dispatch -----------------------------
+async def test_local_genuine_dispatches_by_kind(monkeypatch) -> None:
+    v = LocalGenuineVerifier()
+    # Force every constructed sub-verifier to report its kind via a sentinel
+    # VerifyResult, so we can assert routing without touching any real CLI.
+    docker_sub = v._sub_for(ArtifactKind.DOCKERFILE)
+    tf_sub = v._sub_for(ArtifactKind.TERRAFORM)
+    assert isinstance(docker_sub, LocalDockerVerifier)
+    assert isinstance(tf_sub, LocalTerraformVerifier)
+
+    async def fake_docker(artifact, spec):
+        return VerifyResult(backend="local-docker", status="routed-docker", build_ok=True)
+
+    async def fake_tf(artifact, spec):
+        return VerifyResult(backend="local-terraform", status="routed-tf", build_ok=True)
+
+    monkeypatch.setattr(docker_sub, "verify", fake_docker)
+    monkeypatch.setattr(tf_sub, "verify", fake_tf)
+
+    df_res = await v.verify(GOOD_DOCKERFILE, _spec(port=8000))
+    tf_res = await v.verify(GOOD_TERRAFORM, _tf_spec())
+    assert df_res.status == "routed-docker"
+    assert df_res.backend == "local-docker"
+    assert tf_res.status == "routed-tf"
+    assert tf_res.backend == "local-terraform"
+
+
+async def test_local_genuine_python_matches_local_py() -> None:
+    # PYTHON dispatches to LocalPyVerifier: a trivial clean-exit program yields
+    # build_ok & smoke_ok with no real terraform/docker involved.
+    v = LocalGenuineVerifier()
+    res = await v.verify("import sys; sys.exit(0)", _py_spec())
+    assert res.backend == "local-py"
+    assert res.build_ok is True
+    assert res.smoke_ok is True
+    assert res.hack_flags.any() is False
+
+
+async def test_local_genuine_caches_sub_verifiers() -> None:
+    v = LocalGenuineVerifier()
+    first = v._sub_for(ArtifactKind.K8S)
+    second = v._sub_for(ArtifactKind.K8S)
+    assert first is second
+    assert isinstance(first, LocalK8sVerifier)
+
+
+def test_local_genuine_unknown_kind_falls_back_to_static() -> None:
+    v = LocalGenuineVerifier()
+    sub = v._sub_for(ArtifactKind.CI_YAML)
+    assert isinstance(sub, StaticVerifier)
