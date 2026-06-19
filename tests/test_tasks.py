@@ -117,3 +117,97 @@ def test_unknown_split_raises() -> None:
 
     with pytest.raises(ValueError):
         infra_tasks.generate_tasks(split="validation")
+
+
+# --- compose kind ----------------------------------------------------------
+def test_dockerfile_kind_default_unchanged() -> None:
+    # The default kwarg must produce byte-for-byte identical tasks to the
+    # historical no-kwarg call (questions, ids, and full info dicts).
+    no_kwarg = infra_tasks.generate_tasks(n=10, seed=5, split="train")
+    explicit = infra_tasks.generate_tasks(n=10, seed=5, split="train", kind="dockerfile")
+    assert no_kwarg == explicit
+
+
+def test_compose_task_shape_and_locked_smoke_keys() -> None:
+    tasks = infra_tasks.generate_tasks(n=16, seed=0, split="test", kind="compose")
+    assert tasks
+    for t in tasks:
+        info = t["info"]
+        assert info["kind"] == ArtifactKind.COMPOSE.value == "compose"
+        assert info["spec_id"].startswith("compose-")
+        smoke = info["smoke"]
+        # Locked compose smoke contract.
+        assert set(smoke) >= {
+            "port",
+            "health_path",
+            "expect_status",
+            "must_contain",
+            "dependency_service",
+        }
+        port = smoke["port"]
+        assert isinstance(port, int)
+        assert smoke["health_path"].startswith("/")
+        assert smoke["expect_status"] == 200
+        assert smoke["must_contain"] == [
+            "services:",
+            "ports:",
+            f"{port}:{port}",
+            "healthcheck:",
+        ]
+        # dependency_service is None iff dependency == "none".
+        dep = info["dependency"]
+        if dep == "none":
+            assert smoke["dependency_service"] is None
+        else:
+            assert smoke["dependency_service"] == dep
+            assert smoke["dependency_service"] in ("postgres", "redis")
+
+
+def test_compose_dependency_service_none_iff_none() -> None:
+    tasks = infra_tasks.generate_tasks(seed=0, split="train", kind="compose")
+    for t in tasks:
+        info = t["info"]
+        is_none = info["smoke"]["dependency_service"] is None
+        assert is_none == (info["dependency"] == "none")
+
+
+def test_compose_deterministic_for_seed() -> None:
+    a = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="compose")
+    b = infra_tasks.generate_tasks(n=8, seed=7, split="train", kind="compose")
+    assert [t["question"] for t in a] == [t["question"] for t in b]
+    assert [t["info"]["spec_id"] for t in a] == [t["info"]["spec_id"] for t in b]
+
+
+def test_compose_ids_disjoint_from_dockerfile_ids() -> None:
+    df = infra_tasks.generate_tasks(n=12, seed=0, split="train")
+    comp = infra_tasks.generate_tasks(n=12, seed=0, split="train", kind="compose")
+    df_ids = {t["info"]["spec_id"] for t in df}
+    comp_ids = {t["info"]["spec_id"] for t in comp}
+    assert df_ids.isdisjoint(comp_ids)
+
+
+def test_compose_build_verify_spec_kind() -> None:
+    tasks = infra_tasks.generate_tasks(n=6, seed=2, split="train", kind="compose")
+    assert tasks
+    for t in tasks:
+        spec = infra_tasks.build_verify_spec(t["info"])
+        assert isinstance(spec, VerifySpec)
+        assert spec.kind is ArtifactKind.COMPOSE
+        # No Dockerfile scaffold is attached on the compose path.
+        assert "context_files" not in spec.smoke
+        assert spec.smoke["dependency_service"] == t["info"]["smoke"]["dependency_service"]
+
+
+def test_compose_system_prompt_constrains_output() -> None:
+    sp = infra_tasks.COMPOSE_SYSTEM_PROMPT
+    assert "```yaml" in sp
+    assert "ONLY" in sp
+    assert "services:" in sp
+    assert "<think>" in sp  # explicitly forbids think blocks
+
+
+def test_compose_unknown_kind_raises() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        infra_tasks.generate_tasks(kind="terraform")

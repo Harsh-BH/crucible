@@ -122,6 +122,7 @@ def load_environment(
     *,
     verifier_backend: str = "static",
     verifier: "Verifier | None" = None,
+    artifact_kind: str = "dockerfile",
     build_weight: float = 0.3,
     smoke_weight: float = 0.7,
     hack_penalty: float = 0.0,
@@ -143,6 +144,12 @@ def load_environment(
     verifier:
         An explicit ``Verifier`` instance. If given, it overrides
         ``verifier_backend`` (used for testing with a stub).
+    artifact_kind:
+        Which artifact the model emits and is graded on. ``"dockerfile"`` (the
+        default — historical behavior unchanged) selects the Dockerfile parser,
+        system prompt, and task generation; ``"compose"`` selects the
+        ``docker-compose.yml`` parser / prompt / tasks (graded by
+        ``check_compose`` on the static path).
     build_weight, smoke_weight, hack_penalty:
         Reward-shaping weights forwarded to ``verifier.shape_reward``.
     num_tasks, seed, split:
@@ -153,7 +160,15 @@ def load_environment(
     """
     import verifiers as vf  # heavy import, only when actually constructing the env
 
-    parser = vf.Parser(extract_fn=parser_mod.extract_dockerfile)
+    # Select the artifact-kind-specific parser + system prompt (default unchanged).
+    if artifact_kind == "compose":
+        extract_fn = parser_mod.extract_compose
+        system_prompt = tasks_mod.COMPOSE_SYSTEM_PROMPT
+    else:
+        extract_fn = parser_mod.extract_dockerfile
+        system_prompt = tasks_mod.SYSTEM_PROMPT
+
+    parser = vf.Parser(extract_fn=extract_fn)
 
     # Resolve the verifier once and close over it.
     active_verifier = _resolve_verifier(verifier, verifier_backend, sentinel_base_url)
@@ -163,14 +178,18 @@ def load_environment(
         from datasets import Dataset
 
         return Dataset.from_list(
-            tasks_mod.generate_tasks(n=num_tasks, seed=seed, split=split)
+            tasks_mod.generate_tasks(
+                n=num_tasks, seed=seed, split=split, kind=artifact_kind
+            )
         )
 
     def _eval_builder() -> "Any":
         from datasets import Dataset
 
         return Dataset.from_list(
-            tasks_mod.generate_tasks(n=num_tasks, seed=seed, split="test")
+            tasks_mod.generate_tasks(
+                n=num_tasks, seed=seed, split="test", kind=artifact_kind
+            )
         )
 
     # ------------------------------------------------------------------
@@ -278,13 +297,14 @@ def load_environment(
     return vf.SingleTurnEnv(
         dataset=_train_builder,
         eval_dataset=_eval_builder,
-        system_prompt=tasks_mod.SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         parser=parser,
         rubric=rubric,
     )
 
 
-# Re-export the gold helper for convenience (eval references / sanity checks).
+# Re-export the gold helpers for convenience (eval references / sanity checks).
 gold_dockerfile = gold_mod.gold_dockerfile
+gold_compose = gold_mod.gold_compose
 
-__all__ = ["load_environment", "gold_dockerfile"]
+__all__ = ["load_environment", "gold_dockerfile", "gold_compose"]

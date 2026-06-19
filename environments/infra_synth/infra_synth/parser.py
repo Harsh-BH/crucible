@@ -37,6 +37,9 @@ _FENCE_RE = re.compile(
 # Default info-strings that mark a Dockerfile block (compared case-insensitively).
 _DOCKERFILE_LANGS: tuple[str, ...] = ("dockerfile", "docker")
 
+# Info-strings that mark a Docker Compose (YAML) block (compared case-insensitively).
+_COMPOSE_LANGS: tuple[str, ...] = ("yaml", "yml", "compose", "docker-compose")
+
 
 def _iter_blocks(text: str) -> list[tuple[str, str]]:
     """Return ``[(lang, body), ...]`` for every fenced block, in document order.
@@ -89,4 +92,16 @@ def extract_dockerfile(text: str) -> str:
     return extract_fenced(text, _DOCKERFILE_LANGS)
 
 
-__all__ = ["extract_dockerfile", "extract_fenced"]
+def extract_compose(text: str) -> str:
+    """Pull the Docker Compose artifact out of a model completion.
+
+    Prefers ```` ```yaml ```` / ```` ```yml ```` / ```` ```compose ```` /
+    ```` ```docker-compose ```` fenced blocks but accepts a bare ```` ``` ````
+    block; takes the **last** matching block and returns its stripped contents
+    (``""`` if none). Robust to surrounding prose and to multiple code blocks in
+    the same completion (mirrors :func:`extract_dockerfile`).
+    """
+    return extract_fenced(text, _COMPOSE_LANGS)
+
+
+__all__ = ["extract_dockerfile", "extract_compose", "extract_fenced"]

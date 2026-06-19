@@ -56,12 +56,20 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.isort]
+# `verifier` now lives nested (verifier/verifier/), so the repo-root `verifier/`
+# is no longer an importable package and ruff stops auto-detecting it as
+# first-party. Declare it so import grouping stays as before. (`training`/`eval`/
+# `analysis` are still repo-root packages and auto-detected; `infra_synth` lives
+# under environments/ and was never first-party here.)
+known-first-party = ["verifier"]
+
 [tool.ruff.lint.per-file-ignores]
-# verifier/types.py is a FROZEN CONTRACT written verbatim; consumers depend on
-# its exact shape, so we do not let the linter rewrite it:
+# verifier/verifier/types.py is a FROZEN CONTRACT written verbatim; consumers
+# depend on its exact shape, so we do not let the linter rewrite it:
 #   UP042 -> would change `class ArtifactKind(str, Enum)` to StrEnum.
 #   E501  -> a single long line in a docstring.
-"verifier/types.py" = ["UP042", "E501"]
+"verifier/verifier/types.py" = ["UP042", "E501"]
 # `vf` (verifiers) is a TYPE_CHECKING-only import, so the return annotation MUST
 # stay quoted; UP037 would (incorrectly) strip the quotes and break runtime.
 "environments/infra_synth/infra_synth/environment.py" = ["UP037"]

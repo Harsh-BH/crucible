@@ -30,10 +30,19 @@ and then exit ``0``. Earlier lines (debug noise, warnings) are ignored.
 last line upward for the first line that ``json.loads`` into a ``dict`` carrying
 the ``build_ok`` key. This makes the contract robust to leading/trailing noise.
 
-NOTE: This is a *static* heuristic stand-in. ``check_dockerfile`` never builds a
-real image or makes a network request; it parses the Dockerfile text and applies
-documented heuristics. The genuine build+probe lives in
-:class:`verifier.backends.LocalDockerVerifier`.
+NOTE: This is a *static* heuristic stand-in. ``check_dockerfile`` /
+``check_compose`` never build a real image or make a network request; they parse
+the artifact text and apply documented heuristics. The genuine build+probe lives
+in :class:`verifier.backends.LocalDockerVerifier`.
+
+Kind dispatch
+-------------
+The static path is :class:`ArtifactKind`-aware. :func:`check_artifact` routes by
+``spec.kind`` (``DOCKERFILE`` -> :func:`check_dockerfile`, ``COMPOSE`` ->
+:func:`check_compose`, default -> Dockerfile to preserve historical behavior),
+and :func:`build_python_harness` inlines the *right* check body for the kind via
+a small registry. Each kind contributes a stdlib-only ``_run_*_checks`` body that
+takes already-extracted params (never a ``VerifySpec``) so it string-inlines.
 """
 from __future__ import annotations
 
@@ -46,6 +55,8 @@ if TYPE_CHECKING:  # avoid importing types at the source-string level
 
 __all__ = [
     "check_dockerfile",
+    "check_compose",
+    "check_artifact",
     "build_python_harness",
     "parse_harness_output",
 ]
@@ -233,7 +244,7 @@ def _run_dockerfile_checks(
     # --- base_image_prefix -------------------------------------------------
     base_prefix_ok = True
     if base_image_prefix:
-        base_prefix_ok = bool(base_image) and base_image.startswith(base_image_prefix)
+        base_prefix_ok = base_image is not None and base_image.startswith(base_image_prefix)
         if not base_prefix_ok:
             reasons.append(
                 f"base image {base_image!r} does not start with "
@@ -383,23 +394,333 @@ def check_dockerfile(artifact: str, spec: VerifySpec) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Docker Compose check logic (kind == COMPOSE).
+#
+# Like the Dockerfile path above, this is a documented stand-in: it does NOT run
+# ``docker compose`` (or import PyYAML -- the harness must stay stdlib-only). It
+# parses the compose document with indentation/substring/regex heuristics so it
+# can be string-inlined into the self-contained harness exactly like
+# ``_run_dockerfile_checks``. It depends only on ``re`` + plain types and takes
+# already-extracted params (not a VerifySpec).
+# ---------------------------------------------------------------------------
+
+
+def _top_level_keys(text: str) -> list[str]:
+    """Return the YAML mapping keys at indentation level 0 (heuristic).
+
+    A "top-level key" is a non-comment, non-list line that starts in column 0 and
+    has the ``key:`` shape. Good enough to detect ``services:``/``version:`` etc.
+    """
+    keys: list[str] = []
+    for raw in text.splitlines():
+        if not raw or raw[0] in (" ", "\t", "#"):
+            continue
+        m = re.match(r"^([A-Za-z0-9_.-]+)\s*:", raw)
+        if m:
+            keys.append(m.group(1))
+    return keys
+
+
+def _service_blocks(text: str) -> list[str]:
+    """Return the raw text of each block nested under top-level ``services:``.
+
+    Heuristic: find the ``services:`` line, then collect every line more indented
+    than it until indentation returns to <= the ``services:`` indent. Within that
+    region, a child key (the *first* indentation level under ``services:``) opens
+    a new service block; deeper lines belong to the current service. Returns one
+    text chunk per service (the service key line + its body).
+    """
+    lines = text.splitlines()
+    # Locate the top-level ``services:`` line and its indentation.
+    svc_idx = -1
+    svc_indent = 0
+    for i, raw in enumerate(lines):
+        if raw and raw[0] not in (" ", "\t", "#") and re.match(r"^services\s*:", raw):
+            svc_idx = i
+            svc_indent = len(raw) - len(raw.lstrip(" "))
+            break
+    if svc_idx < 0:
+        return []
+
+    # Indentation of the first child determines the per-service nesting level.
+    child_indent: int | None = None
+    blocks: list[str] = []
+    cur: list[str] = []
+    for raw in lines[svc_idx + 1 :]:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            if cur:  # keep blanks/comments inside an open block (harmless)
+                cur.append(raw)
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent <= svc_indent:  # dedented back out of services:
+            break
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent:  # a new service key opens a block
+            if cur:
+                blocks.append("\n".join(cur))
+            cur = [raw]
+        else:  # deeper -> body of the current service
+            cur.append(raw)
+    if cur:
+        blocks.append("\n".join(cur))
+    return blocks
+
+
+def _run_compose_checks(
+    artifact: str,
+    *,
+    must_contain: list[str],
+    port: int | None,
+    health_path: str | None,
+    dependency_service: str | None,
+) -> dict[str, Any]:
+    """Core deterministic Docker Compose analysis (stdlib-only, no VerifySpec).
+
+    Returns ``{"build_ok", "smoke_ok", "signals", "reasons"}`` (the same contract
+    as :func:`_run_dockerfile_checks`). A documented heuristic stand-in -- it does
+    NOT run ``docker compose``; it parses the document by indentation/substring.
+    This is the body inlined into the harness for ``ArtifactKind.COMPOSE``.
+
+    Heuristics:
+      * ``build_ok`` -- a top-level ``services:`` key exists with >= 1 indented
+        service block, at least one service defines ``image:`` or ``build:``, and
+        all ``must_contain`` substrings are present (case-sensitive).
+      * ``smoke_ok`` -- ``build_ok`` AND a service maps the requested ``port``
+        under a ``ports:`` block AND a ``healthcheck:`` block is present (or the
+        ``health_path`` string appears) AND (if ``dependency_service`` is given) a
+        service references it (by service key or ``image:``).
+      * ``signals.spec_gaming`` -- the artifact ticks every ``must_contain`` token
+        yet has NO real service body (no ``image:``/``build:`` anywhere): the
+        trivial token-parroting cheat (mirrors the Dockerfile intent).
+    """
+    reasons: list[str] = []
+    text = artifact or ""
+    top_keys = _top_level_keys(text)
+    has_services = "services" in top_keys
+    blocks = _service_blocks(text)
+    service_count = len(blocks)
+
+    # A service has a "real body" if it declares an image or a build context.
+    has_image = bool(re.search(r"(^|\n)\s*image\s*:", text))
+    has_build = bool(re.search(r"(^|\n)\s*build\s*:", text))
+    has_real_service = (has_image or has_build) and service_count > 0
+
+    # --- syntax sanity -----------------------------------------------------
+    if not has_services:
+        reasons.append("no top-level 'services:' key")
+    elif service_count == 0:
+        reasons.append("'services:' present but defines no indented service")
+    if has_services and not (has_image or has_build):
+        reasons.append("no service defines an 'image:' or 'build:'")
+
+    # --- must_contain ------------------------------------------------------
+    missing_required: list[str] = []
+    for token in must_contain or []:
+        if token not in text:  # case-sensitive substring match
+            missing_required.append(token)
+    if missing_required:
+        reasons.append(f"missing required tokens: {missing_required}")
+
+    # --- build_ok decision -------------------------------------------------
+    build_ok = bool(
+        has_services
+        and service_count > 0
+        and (has_image or has_build)
+        and not missing_required
+    )
+
+    # --- smoke_ok decision -------------------------------------------------
+    # (a) the requested port is published under a ``ports:`` block.
+    ports_ok: bool
+    if port is not None:
+        # Accept "<p>:<p>" (quoted or bare) and a bare "- <p>" short form, but
+        # only when it appears in a ``ports:`` context somewhere in the document.
+        has_ports_key = bool(re.search(r"(^|\n)\s*ports\s*:", text))
+        mapped = bool(
+            re.search(rf'["\']?{port}\s*:\s*{port}["\']?', text)
+            or re.search(rf"(^|\n)\s*-\s*['\"]?{port}['\"]?\s*(#.*)?$", text)
+        )
+        ports_ok = has_ports_key and mapped
+        if not ports_ok:
+            reasons.append(f"port {port} not published under a 'ports:' block")
+    else:
+        ports_ok = bool(re.search(r"(^|\n)\s*ports\s*:", text))
+
+    # (b) a healthcheck is configured (block present) or the health path shows up.
+    has_healthcheck = bool(re.search(r"(^|\n)\s*healthcheck\s*:", text))
+    healthcheck_ok = has_healthcheck or bool(health_path and health_path in text)
+    if not healthcheck_ok:
+        reasons.append("no 'healthcheck:' block and health_path not referenced")
+
+    # (c) the required dependency service is present (by key or image reference).
+    dependency_ok = True
+    if dependency_service:
+        dep = dependency_service
+        dependency_ok = bool(
+            re.search(rf"(^|\n)\s*{re.escape(dep)}\s*:", text)
+            or re.search(rf"(^|\n)\s*image\s*:\s*[^\n]*{re.escape(dep)}", text)
+        )
+        if not dependency_ok:
+            reasons.append(f"dependency service {dep!r} not present")
+
+    smoke_ok = bool(build_ok and ports_ok and healthcheck_ok and dependency_ok)
+
+    # --- spec-gaming detection --------------------------------------------
+    # Ticks every must_contain token but has no real service body anywhere: the
+    # trivial token-parroting cheat (mirrors the Dockerfile spec_gaming intent).
+    satisfies_tokens = bool(must_contain) and not missing_required
+    spec_gaming = bool(satisfies_tokens and not has_real_service)
+    if spec_gaming:
+        reasons.append(
+            "spec_gaming: ticks must_contain without a real service "
+            "(no image:/build:)"
+        )
+
+    signals: dict[str, Any] = {
+        "has_services": has_services,
+        "service_count": service_count,
+        "has_image": has_image,
+        "has_build": has_build,
+        "has_real_service": has_real_service,
+        "ports_ok": ports_ok,
+        "healthcheck_ok": healthcheck_ok,
+        "has_healthcheck": has_healthcheck,
+        "dependency_ok": dependency_ok,
+        "missing_required": missing_required,
+        "spec_gaming": spec_gaming,
+    }
+    return {
+        "build_ok": build_ok,
+        "smoke_ok": smoke_ok,
+        "signals": signals,
+        "reasons": reasons,
+    }
+
+
+def _compose_smoke_params(spec: VerifySpec) -> dict[str, Any]:
+    """Extract the compose harness params from a VerifySpec's ``smoke`` dict."""
+    smoke = spec.smoke or {}
+    port = smoke.get("port")
+    try:
+        port = int(port) if port is not None else None
+    except (TypeError, ValueError):
+        port = None
+    return {
+        "must_contain": list(smoke.get("must_contain", []) or []),
+        "port": port,
+        "health_path": smoke.get("health_path"),
+        "dependency_service": smoke.get("dependency_service"),
+    }
+
+
+def check_compose(artifact: str, spec: VerifySpec) -> dict[str, Any]:
+    """Statically analyze a Docker Compose artifact against ``spec``.
+
+    Returns ``{"build_ok": bool, "smoke_ok": bool, "signals": {...},
+    "reasons": [...]}`` -- the same shape as :func:`check_dockerfile`. A
+    deterministic heuristic (no real ``docker compose``); see
+    :func:`_run_compose_checks` for the documented heuristics. Reads
+    ``spec.smoke`` keys ``must_contain`` (list), ``port`` (int|None),
+    ``health_path`` (str|None), ``dependency_service`` (str|None).
+    """
+    params = _compose_smoke_params(spec)
+    return _run_compose_checks(artifact, **params)
+
+
+# ---------------------------------------------------------------------------
+# Kind dispatch (in-process static path).
+# ---------------------------------------------------------------------------
+def check_artifact(artifact: str, spec: VerifySpec) -> dict[str, Any]:
+    """Statically analyze ``artifact`` by ``spec.kind``.
+
+    Routes ``ArtifactKind.DOCKERFILE`` -> :func:`check_dockerfile` and
+    ``ArtifactKind.COMPOSE`` -> :func:`check_compose`. Any other kind falls back
+    to the Dockerfile path, preserving the historical behavior for kinds that
+    reach the static path today. Returns the common
+    ``{"build_ok","smoke_ok","signals","reasons"}`` shape.
+    """
+    from verifier.types import ArtifactKind  # local import: keep module light
+
+    if spec.kind == ArtifactKind.COMPOSE:
+        return check_compose(artifact, spec)
+    return check_dockerfile(artifact, spec)
+
+
+# ---------------------------------------------------------------------------
 # Self-contained harness builder.
 # ---------------------------------------------------------------------------
 
 # The harness embeds the check body as a string. We re-derive that string from
 # the source of the functions above so there is a SINGLE source of truth (DRY):
-# editing the checks updates the harness automatically.
+# editing the checks updates the harness automatically. The harness is kind-aware
+# -- a tiny registry (``_HARNESS_KINDS``) maps each ``ArtifactKind`` to the source
+# functions to inline, the constants they close over, the ``spec.smoke`` param
+# extractor, and the ``_main`` body that assigns inputs + calls the right check.
 import inspect as _inspect  # noqa: E402  (local-only; kept off the hot import path conceptually)
 
-_CHECK_SOURCE = "".join(
-    _inspect.getsource(fn)
-    for fn in (_logical_lines, _instruction, _run_dockerfile_checks)
-)
-# Constants the inlined functions close over.
-_CONST_SOURCE = (
+# Constants the Dockerfile check closes over (inlined only for that kind).
+_DOCKERFILE_CONST_SOURCE = (
     "_SERVER_TOKENS = " + repr(_SERVER_TOKENS) + "\n"
     "_REAL_SETUP_TOKENS = " + repr(_REAL_SETUP_TOKENS) + "\n"
 )
+
+# Per-kind ``_main`` bodies. Each assigns the inlined inputs and calls the right
+# ``_run_*_checks`` into ``result``. Double-braces survive ``str.format`` and the
+# ``{...}`` fields are substituted by :func:`build_python_harness`.
+_DOCKERFILE_MAIN_BODY = '''\
+        _ARTIFACT = {artifact!r}
+        result = _run_dockerfile_checks(
+            _ARTIFACT,
+            must_contain={must_contain!r},
+            base_image_prefix={base_image_prefix!r},
+            port={port!r},
+            health_path={health_path!r},
+        )'''
+
+_COMPOSE_MAIN_BODY = '''\
+        _ARTIFACT = {artifact!r}
+        result = _run_compose_checks(
+            _ARTIFACT,
+            must_contain={must_contain!r},
+            port={port!r},
+            health_path={health_path!r},
+            dependency_service={dependency_service!r},
+        )'''
+
+
+class _HarnessKind:
+    """One entry in the harness registry: how to inline & call a kind's check."""
+
+    __slots__ = ("funcs", "const_source", "smoke_params", "main_body")
+
+    def __init__(self, funcs, const_source, smoke_params, main_body):
+        self.funcs = funcs  # source functions to inline (DRY single source)
+        self.const_source = const_source  # module-level constants they close over
+        self.smoke_params = smoke_params  # spec -> dict of inlined inputs
+        self.main_body = main_body  # _main() body template (assigns + calls)
+
+
+# Lazily built so we never need a VerifySpec at import time; keyed by the
+# ArtifactKind *value* (str) to avoid importing the enum at module level.
+def _harness_registry() -> dict[str, _HarnessKind]:
+    from verifier.types import ArtifactKind  # local import: keep module light
+
+    return {
+        ArtifactKind.DOCKERFILE.value: _HarnessKind(
+            funcs=(_logical_lines, _instruction, _run_dockerfile_checks),
+            const_source=_DOCKERFILE_CONST_SOURCE,
+            smoke_params=_smoke_params,
+            main_body=_DOCKERFILE_MAIN_BODY,
+        ),
+        ArtifactKind.COMPOSE.value: _HarnessKind(
+            funcs=(_top_level_keys, _service_blocks, _run_compose_checks),
+            const_source="",
+            smoke_params=_compose_smoke_params,
+            main_body=_COMPOSE_MAIN_BODY,
+        ),
+    }
+
 
 _HARNESS_TEMPLATE = '''\
 #!/usr/bin/env python3
@@ -420,23 +741,10 @@ from typing import Any
 # --- inlined check logic (single source of truth: verifier.smoke.checks) ---
 {checks}
 
-# --- inlined inputs --------------------------------------------------------
-_ARTIFACT = {artifact!r}
-_MUST_CONTAIN = {must_contain!r}
-_BASE_IMAGE_PREFIX = {base_image_prefix!r}
-_PORT = {port!r}
-_HEALTH_PATH = {health_path!r}
-
-
+# --- inlined inputs + dispatch (kind: {kind}) ------------------------------
 def _main() -> int:
     try:
-        result = _run_dockerfile_checks(
-            _ARTIFACT,
-            must_contain=_MUST_CONTAIN,
-            base_image_prefix=_BASE_IMAGE_PREFIX,
-            port=_PORT,
-            health_path=_HEALTH_PATH,
-        )
+{main_body}
     except Exception as exc:  # never crash the contract; report it
         result = {{
             "build_ok": False,
@@ -458,23 +766,33 @@ def build_python_harness(artifact: str, spec: VerifySpec) -> str:
     """Return a SELF-CONTAINED Python 3 source string for ``artifact``/``spec``.
 
     The returned program imports only stdlib (``json``, ``re``, ``sys``), inlines
-    the artifact, the relevant ``spec.smoke`` params, and the check logic, and
-    prints exactly one final line of JSON
+    the artifact, the relevant ``spec.smoke`` params, and the check logic for
+    ``spec.kind``, and prints exactly one final line of JSON
     (``{"build_ok","smoke_ok","signals","reasons"}``) to stdout before exiting
     ``0``. This is what :class:`LocalPyVerifier` runs as a subprocess and what
     :class:`SentinelVerifier` submits to the hardened sandbox.
 
-    Use :func:`parse_harness_output` to recover the JSON.
+    Dispatches on ``spec.kind`` via the harness registry: ``DOCKERFILE`` inlines
+    the Dockerfile heuristics (unchanged), ``COMPOSE`` inlines the compose ones.
+    Any other kind falls back to the Dockerfile path (matching
+    :func:`check_artifact`). Use :func:`parse_harness_output` to recover the JSON.
     """
-    params = _smoke_params(spec)
+    from verifier.types import ArtifactKind
+
+    registry = _harness_registry()
+    entry = registry.get(spec.kind.value if isinstance(spec.kind, ArtifactKind) else spec.kind)
+    if entry is None:  # fall back to Dockerfile, preserving historical behavior
+        entry = registry[ArtifactKind.DOCKERFILE.value]
+
+    check_source = "".join(_inspect.getsource(fn) for fn in entry.funcs)
+    params = entry.smoke_params(spec)
+    main_body = entry.main_body.format(artifact=artifact, **params)
+    kind_value = spec.kind.value if isinstance(spec.kind, ArtifactKind) else str(spec.kind)
     return _HARNESS_TEMPLATE.format(
-        consts=_CONST_SOURCE,
-        checks=_CHECK_SOURCE,
-        artifact=artifact,
-        must_contain=params["must_contain"],
-        base_image_prefix=params["base_image_prefix"],
-        port=params["port"],
-        health_path=params["health_path"],
+        consts=entry.const_source,
+        checks=check_source,
+        kind=kind_value,
+        main_body=main_body,
     )
 
 

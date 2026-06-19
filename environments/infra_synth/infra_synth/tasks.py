@@ -29,6 +29,8 @@ from typing import Any
 
 from verifier.types import ArtifactKind, ResourceLimits, VerifySpec
 
+from .scaffold import app_scaffold
+
 # ---------------------------------------------------------------------------
 # Parameter grid
 # ---------------------------------------------------------------------------
@@ -72,6 +74,14 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
 PORTS: tuple[int, ...] = (8000, 8080, 5000, 3000, 9000)
 HEALTH_PATHS: tuple[str, ...] = ("/health", "/healthz", "/livez", "/ping", "/status")
 
+# Dependency profile -> the compose service name (and image base) that satisfies
+# ``check_compose``'s ``dependency_service`` gate. ``none`` has no extra service.
+DEP_SERVICES: dict[str, str | None] = {
+    "none": None,
+    "postgres": "postgres",
+    "redis": "redis",
+}
+
 TASK_NAME = "infra_synth"
 
 SYSTEM_PROMPT = (
@@ -85,6 +95,22 @@ SYSTEM_PROMPT = (
     "- Use a pinned base image tag (never `latest`).\n"
     "- Install the required dependencies, COPY the application in, EXPOSE the "
     "requested port, and set a CMD that starts the server on that port.\n"
+)
+
+COMPOSE_SYSTEM_PROMPT = (
+    "You are an expert platform engineer. Given an infrastructure specification, "
+    "produce a single, correct docker-compose.yml that satisfies it.\n\n"
+    "Output rules (strict):\n"
+    "- Respond with ONLY one docker-compose.yml, wrapped in a single ```yaml "
+    "fenced code block.\n"
+    "- Do NOT include any prose, explanation, commentary, or <think> blocks before "
+    "or after the block.\n"
+    "- Define a top-level `services:` mapping with a web service that builds the "
+    "app (`build: .`).\n"
+    "- Publish the requested port (map `<port>:<port>` under a `ports:` block) and "
+    "add a `healthcheck:` that probes the requested health path.\n"
+    "- When an external service dependency is requested, declare it as a separate "
+    "service (using a pinned image) and reference it via `depends_on`.\n"
 )
 
 
@@ -209,6 +235,75 @@ def _info_for(combo: tuple[str, str, str, int, str], spec_id: str) -> dict[str, 
     }
 
 
+def _render_compose_question(combo: tuple[str, str, str, int, str]) -> str:
+    """Render a natural-language Docker Compose spec for one parameter combo."""
+    language, framework, dependency, port, health = combo
+    lang_meta = LANGUAGES[language]
+    fw_meta = FRAMEWORKS[framework]
+    dep_service = DEP_SERVICES[dependency]
+
+    dep_clause = (
+        "The service has no external service dependencies."
+        if dep_service is None
+        else (
+            f"It connects to a {dep_service} backing service, which must be "
+            f"defined as a separate service in the compose file and referenced "
+            f"via depends_on."
+        )
+    )
+    return (
+        f"Write a docker-compose.yml that runs a {fw_meta['display']} "
+        f"{lang_meta['display']} web service built from the local Dockerfile "
+        f"(`build: .`). "
+        f"{dep_clause} "
+        f"The web service must publish port {port} (map {port}:{port}) and "
+        f"declare a health-check that probes `{health}` and expects HTTP 200. "
+        f"Pin any service images to explicit tags (never `latest`)."
+    )
+
+
+def _compose_info_for(
+    combo: tuple[str, str, str, int, str], spec_id: str
+) -> dict[str, Any]:
+    """Build the compose ``info`` dict (the pipeline's source of truth) for a combo.
+
+    Mirrors :func:`_info_for` but targets ``ArtifactKind.COMPOSE`` and the
+    ``check_compose`` smoke contract: ``port`` / ``health_path`` / ``expect_status``
+    / ``must_contain`` (the case-sensitive substring gate) / ``dependency_service``
+    (``"postgres"``/``"redis"``, or ``None`` when ``dependency == "none"``).
+    """
+    language, framework, dependency, port, health = combo
+    fw_meta = FRAMEWORKS[framework]
+    dep_service = DEP_SERVICES[dependency]
+
+    must_contain = [
+        "services:",
+        "ports:",
+        f"{port}:{port}",
+        "healthcheck:",
+    ]
+    return {
+        "spec_id": spec_id,
+        "kind": ArtifactKind.COMPOSE.value,  # "compose"
+        # Grid parameters (also used by gold.py to render a reference).
+        "language": language,
+        "framework": framework,
+        "dependency": dependency,
+        "packages": list(fw_meta["packages"]),
+        "dep_packages": list(DEPENDENCIES[dependency]["packages"]),
+        "app_target": fw_meta["app_target"],
+        "server": fw_meta["server"],
+        # Smoke-test parameters consumed when constructing a VerifySpec.
+        "smoke": {
+            "port": port,
+            "health_path": health,
+            "expect_status": 200,
+            "must_contain": must_contain,
+            "dependency_service": dep_service,
+        },
+    }
+
+
 def _gold_hint(combo: tuple[str, str, str, int, str]) -> str:
     """Short 'answer' hint stored per task — the canonical base image tag."""
     language = combo[0]
@@ -219,6 +314,7 @@ def generate_tasks(
     n: int | None = None,
     seed: int = 0,
     split: str = "train",
+    kind: str = "dockerfile",
 ) -> list[dict[str, Any]]:
     """Return a deterministic, seeded list of task dicts for ``split``.
 
@@ -226,13 +322,25 @@ def generate_tasks(
 
         {"question": <NL spec>, "answer": <gold hint>, "info": {...}, "task": "infra_synth"}
 
-    Determinism: for a given ``(seed, split)`` the selection and order are stable.
-    ``train`` and ``test`` draw from disjoint combination pools (see
-    :func:`_split_combos`), so the splits are contamination-resistant.
+    Determinism: for a given ``(seed, split, kind)`` the selection and order are
+    stable. ``train`` and ``test`` draw from disjoint combination pools (see
+    :func:`_split_combos`), so the splits are contamination-resistant; ``kind``
+    does NOT change the split (it only changes the rendered artifact).
+
+    ``kind`` selects the target artifact: ``"dockerfile"`` (the default — output
+    is byte-for-byte identical to the historical no-``kind`` behavior) or
+    ``"compose"`` (a ``docker-compose.yml`` NL spec + the ``check_compose`` smoke
+    contract). The ``kind`` is folded into the ``spec_id`` for non-Dockerfile
+    kinds so Dockerfile and Compose task ids never collide.
 
     ``n`` caps the number of tasks (``None`` -> use the whole split pool). If
     ``n`` exceeds the pool size we return the whole pool (no duplication).
     """
+    if kind not in (ArtifactKind.DOCKERFILE.value, ArtifactKind.COMPOSE.value):
+        raise ValueError(
+            f"unknown kind {kind!r} (expected 'dockerfile' or 'compose')"
+        )
+
     pool = _split_combos(split)
     # Explicit, reproducible RNG keyed by seed+split (string seed avoids the
     # per-process hash salt that affects ``hash(tuple)``).
@@ -242,14 +350,24 @@ def generate_tasks(
     if n is not None:
         pool = pool[: max(0, n)]
 
+    is_compose = kind == ArtifactKind.COMPOSE.value
     tasks: list[dict[str, Any]] = []
     for i, combo in enumerate(pool):
-        spec_id = f"{split}-{seed}-{i:04d}-{combo[0]}-{combo[1]}-{combo[2]}-{combo[3]}"
+        base_id = f"{split}-{seed}-{i:04d}-{combo[0]}-{combo[1]}-{combo[2]}-{combo[3]}"
+        if is_compose:
+            spec_id = f"compose-{base_id}"
+            question = _render_compose_question(combo)
+            info = _compose_info_for(combo, spec_id)
+        else:
+            # Dockerfile path: unchanged spec_id / question / info (byte-for-byte).
+            spec_id = base_id
+            question = _render_question(combo)
+            info = _info_for(combo, spec_id)
         tasks.append(
             {
-                "question": _render_question(combo),
+                "question": question,
                 "answer": _gold_hint(combo),
-                "info": _info_for(combo, spec_id),
+                "info": info,
                 "task": TASK_NAME,
             }
         )
@@ -265,7 +383,10 @@ def build_verify_spec(info: dict[str, Any]) -> VerifySpec:
     - ``kind`` comes from ``info['kind']`` (defaults to ``dockerfile``).
     - The ``smoke`` block is passed through verbatim (the verifier backend reads
       ``port`` / ``health_path`` / ``expect_status`` / ``must_contain`` /
-      ``base_image_prefix`` from it).
+      ``base_image_prefix`` from it). For Dockerfile tasks we attach a
+      ``context_files`` map (the app scaffold the Dockerfile ``COPY``s) so
+      ``local-docker`` builds against a real app, not an empty context. A
+      caller-supplied ``context_files`` is left untouched.
     - :class:`ResourceLimits` is built from optional ``info['limits']`` fields,
       falling back to the contract defaults.
     """
@@ -287,20 +408,26 @@ def build_verify_spec(info: dict[str, Any]) -> VerifySpec:
     if not spec_id:
         raise ValueError("info dict missing required 'spec_id'")
 
+    smoke = dict(info.get("smoke", {}))
+    if kind == ArtifactKind.DOCKERFILE and "context_files" not in smoke:
+        smoke["context_files"] = app_scaffold(info)
+
     return VerifySpec(
         spec_id=str(spec_id),
         kind=kind,
-        smoke=dict(info.get("smoke", {})),
+        smoke=smoke,
         limits=limits,
     )
 
 
 __all__ = [
     "SYSTEM_PROMPT",
+    "COMPOSE_SYSTEM_PROMPT",
     "TASK_NAME",
     "LANGUAGES",
     "FRAMEWORKS",
     "DEPENDENCIES",
+    "DEP_SERVICES",
     "PORTS",
     "HEALTH_PATHS",
     "generate_tasks",

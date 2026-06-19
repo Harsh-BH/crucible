@@ -20,6 +20,14 @@ with the same code.
   concurrency and reports throughput + p50/p90/p99. `make_mock_transport()`
   (`httpx.MockTransport`) runs it entirely locally:
   `python -m eval.throughput --mock`.
+- `c3_study.py` (C3) — end-to-end weak-vs-hardened reward-hacking study runner.
+  `run_c3_study(weak, hardened, trials=...)` grades impossible tasks + the
+  adversarial corpus through **`local-py` vs `sentinel`** on the same trials and
+  returns the `compare_weak_vs_hardened` taxonomy, an undeserved-pass metric, and
+  a per-category breakdown. `make_verifiers` wires the pair (injectable Sentinel
+  transport); `default_trials` builds trials from `infra_synth` (imported
+  lazily); `make_mock_sentinel_transport` simulates the hardened sandbox. Run:
+  `python -m eval.c3_study --mock --n 12`.
 
 ## Notes
 

@@ -70,3 +70,39 @@ def test_extract_fenced_language_filter() -> None:
 def test_tilde_fences_supported() -> None:
     text = "~~~dockerfile\nFROM alpine:3.19\n~~~"
     assert infra_parser.extract_dockerfile(text) == "FROM alpine:3.19"
+
+
+# --- extract_compose -------------------------------------------------------
+def test_compose_single_yaml_block() -> None:
+    text = "Here:\n```yaml\nservices:\n  web:\n    build: .\n```\n"
+    assert infra_parser.extract_compose(text) == "services:\n  web:\n    build: ."
+
+
+def test_compose_yml_tag() -> None:
+    text = "```yml\nservices:\n  web:\n    image: nginx:1.27\n```"
+    assert infra_parser.extract_compose(text) == "services:\n  web:\n    image: nginx:1.27"
+
+
+def test_compose_takes_last_yaml_block() -> None:
+    text = (
+        "Draft:\n```yaml\nservices:\n  bad: {}\n```\n"
+        "Final:\n```yaml\nservices:\n  web:\n    build: .\n```\n"
+    )
+    assert infra_parser.extract_compose(text) == "services:\n  web:\n    build: ."
+
+
+def test_compose_tolerates_prose() -> None:
+    text = (
+        "Let me think about the services and ports...\n\n"
+        "```yaml\nservices:\n  web:\n    build: .\n    ports:\n      - \"8000:8000\"\n```\n\n"
+        "Done."
+    )
+    out = infra_parser.extract_compose(text)
+    assert out.startswith("services:")
+    assert "Let me think" not in out
+    assert '"8000:8000"' in out
+
+
+def test_compose_no_block_returns_empty() -> None:
+    assert infra_parser.extract_compose("no code here at all") == ""
+    assert infra_parser.extract_compose("") == ""

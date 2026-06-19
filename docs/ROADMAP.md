@@ -5,8 +5,9 @@
 > [`DESIGN.md`](./DESIGN.md). For the high-level pitch and layout, see the
 > [root README](../README.md).
 >
-> **Snapshot:** 2026-06-15 · branch `claude/wizardly-mayer-cl2h56` · commit `67afe73`
-> · 243 tests passing · ruff-clean.
+> **Snapshot:** 2026-06-16 · branch `main` · 249 tests passing · ruff-clean ·
+> mypy-clean. **NS-1 and NS-2 are done** (see §1); NS-3/NS-4 remain (need GPU /
+> live Sentinel).
 
 ---
 
@@ -23,10 +24,40 @@
 - **M2 scaffolding:** Sentinel-routed reward + parity test + throughput benchmark.
 - **C3/C4 scaffolding:** reward-hacking taxonomy/analysis, unbiased `pass@k`, eval harness, `DESIGN.md`.
 
+**Done since (NS-1, NS-2):**
+- **NS-1 — `crucible-verifier` wheel packaging.** `verifier/` moved to a nested
+  layout (`verifier/verifier/`); a built wheel installs as `import verifier`
+  non-editable (verified in a clean venv). Unblocks Hub publish (M6).
+- **NS-2 — genuine `local-docker` build+smoke.** `infra_synth/scaffold.py`
+  ships a `requirements.txt` + minimal FastAPI/Flask app into the build context
+  (`smoke["context_files"]`); `LocalDockerVerifier` writes it in. Verified
+  end-to-end under a real Docker daemon: gold Dockerfile **builds + serves
+  health → HTTP 200** (both frameworks).
+- **C3 end-to-end study harness (M5 enabler).** `infra_synth/impossible.py`
+  (`impossible_tasks` + `MUTATIONS` that make a spec unsatisfiable — gold fails
+  its own static check, verified — plus a safe category-tagged `adversarial_corpus`),
+  `LocalPyVerifier` now executes `ArtifactKind.PYTHON` directly (weak↔hardened
+  symmetry), and `eval/c3_study.py` (`run_c3_study`) grades the same trials
+  through **weak (`local-py`) vs hardened (`sentinel`)** → `compare_weak_vs_hardened`
+  taxonomy + an undeserved-pass metric. Demonstrated with the simulated sandbox
+  (`--mock`): the hardened side closes `resource_manipulation` (mem/timer) that
+  weak lets pass. The **live weak-vs-hardened numbers** still await NS-4.
+- **M4 (started) — Docker Compose artifact kind, end-to-end (static path).** The
+  static checker is now **kind-dispatched** (`verifier.smoke.checks.check_artifact`
+  + a per-kind harness builder); `check_compose` is a stdlib-only heuristic
+  stand-in (no PyYAML). The env gained `extract_compose`, `gold_compose`,
+  `generate_tasks(kind="compose")`, `COMPOSE_SYSTEM_PROMPT`, and
+  `load_environment(artifact_kind="compose")`. Verified: gold compose passes its
+  own spec via the in-process static check **and** the inlined `local-py` harness
+  (0 parity mismatches), and `spec_gaming` fires on a trivial token-parroting
+  compose — so the C3 reward-hacking signal extends to compose too. Remaining M4
+  kinds (Terraform `validate`, k8s `kubeconform`, CI-YAML) need external CLIs and
+  a genuine `docker compose up` verifier (vs the static stand-in).
+
 **Scaffolded but NOT yet executed (need real infra):**
 - A real GPU GRPO run (M1 "reward rises, ≥3 seeds").
 - Throughput/parity against a *live* Sentinel (M2 numbers).
-- Genuine `local-docker` build+smoke for realistic apps (needs the app scaffold, below).
+- Real C3 cheating-rate figures: run `eval.c3_study` against a live Sentinel (NS-4).
 
 ---
 
@@ -34,12 +65,14 @@
 
 | # | Task | Why | Acceptance criteria | Effort | Blocks |
 |---|------|-----|---------------------|--------|--------|
-| **NS-1** | **Fix `crucible-verifier` wheel packaging** | `verifier/` is a flat package; a built wheel ships modules at top level, so `import verifier` fails from a wheel. It's `infra_synth`'s dependency → Hub publish is blocked until fixed. | A built `crucible-verifier` wheel installs into a clean venv and `import verifier`, `from verifier.types import VerifyResult` work *non-editable*; 243 tests still green. | S | Hub publish (M6) |
-| **NS-2** | **M3 app scaffold for genuine build+smoke** | `LocalDockerVerifier` builds a context with only the `Dockerfile`; realistic Dockerfiles that `COPY` app code fail. | `environments/infra_synth/.../scaffold.py: app_scaffold(info) -> dict[str,str]` (requirements + a minimal server exposing `/health`); `build_verify_spec` puts it in `smoke["context_files"]`; `LocalDockerVerifier` writes those files into the build context; a gold Dockerfile **builds + serves `/health` → 200** under a real Docker daemon. | M | M3 |
+| ~~**NS-1**~~ ✅ | ~~**Fix `crucible-verifier` wheel packaging**~~ **DONE** | `verifier/` was a flat package; a built wheel shipped modules at top level, so `import verifier` failed from a wheel. | **Met.** `verifier/` moved to a nested layout (`verifier/verifier/`); a built wheel installs into a clean venv and `import verifier` / `from verifier.types import VerifyResult` work *non-editable*; 249 tests green; ruff + mypy clean. | S | Hub publish (M6) |
+| ~~**NS-2**~~ ✅ | ~~**M3 app scaffold for genuine build+smoke**~~ **DONE** | `LocalDockerVerifier` built a context with only the `Dockerfile`; realistic Dockerfiles that `COPY` app code failed. | **Met.** `infra_synth/scaffold.py: app_scaffold(info) -> dict[str,str]` (requirements + a minimal FastAPI/Flask server exposing the health path); `build_verify_spec` puts it in `smoke["context_files"]`; `LocalDockerVerifier` writes those files into the build context (with a path-traversal guard); gold Dockerfile **builds + serves health → 200** under a real Docker daemon (both frameworks). | M | M3 |
 | **NS-3** | **Execute M1 on a GPU** | Prove the loop: reward rises and is stable across ≥3 seeds. | `reverse-text` climbs ~0.05→0.8 (loop sanity), then `gsm8k` on Qwen3-1.7B shows rising reward across seeds {0,1,2}; report mean±95% CI via `training/seeds.py`. | M | M3+ |
 | **NS-4** | **Stand up Sentinel + execute M2** | Real parity + throughput numbers (the systems story). | `make up` in the Sentinel repo (:8080); `python -m eval.parity --base-url ...` shows local-py↔sentinel agreement; `python -m eval.throughput --base-url ...` reports throughput + p50/p90/p99. | S–M | M5 |
 
-**Recommended order:** NS-1 (small, unblocks publishing) → NS-2 (completes C2's "genuine reward") → then NS-3/NS-4 in parallel once compute + a Sentinel host are available.
+**Recommended order:** ~~NS-1~~ → ~~NS-2~~ (both done) → **NS-3/NS-4 in parallel
+once compute + a Sentinel host are available** (the remaining work; both need
+real infra this repo can't self-provision).
 
 ---
 

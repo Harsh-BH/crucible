@@ -1,6 +1,6 @@
-# tests/ — 243 tests, torch-free
+# tests/ — 249 tests, torch-free
 
-Baseline: **243 pass, 1 skipped** (the skip needs an HF network download). Run
+Baseline: **249 pass, 1 skipped** (the skip needs an HF network download). Run
 the whole suite with `uv run pytest -q`.
 
 ## Torch-free discipline
@@ -18,8 +18,9 @@ The suite must run without the GPU stack. Keep it that way:
 - Contract: `test_contracts.py` (pins the FROZEN `verifier/types.py`).
 - Verifier: `test_backends.py` · `test_sentinel_client.py` · `test_reward.py` ·
   `test_checks.py`.
-- Env: `test_tasks.py` · `test_parser.py` · `test_gold.py` ·
-  `test_infra_env_integration.py` · `test_infra_reward.py`.
+- Env: `test_tasks.py` · `test_parser.py` · `test_gold.py` · `test_scaffold.py`
+  (NS-2 app scaffold + build-context wiring) · `test_infra_env_integration.py` ·
+  `test_infra_reward.py`.
 - Training: `test_training_data.py` · `test_training_rewards.py` ·
   `test_training_seeds.py`.
 - Eval: `test_passk.py` · `test_parity.py` · `test_throughput_mock.py`.
