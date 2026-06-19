@@ -1,6 +1,6 @@
 [project]
 name = "infra-synth"
-version = "0.1.1"
+version = "0.1.2"
 description = "RLVR environment: generate infrastructure-as-code (Dockerfile first) graded by build + smoke test in a sandboxed verifier."
 tags = ["single-turn", "code", "infrastructure", "dockerfile", "rlvr", "verifiable-rewards"]
 license = "Apache-2.0"
