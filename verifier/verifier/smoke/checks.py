@@ -31,7 +31,8 @@ last line upward for the first line that ``json.loads`` into a ``dict`` carrying
 the ``build_ok`` key. This makes the contract robust to leading/trailing noise.
 
 NOTE: This is a *static* heuristic stand-in. ``check_dockerfile`` /
-``check_compose`` / ``check_ci_yaml`` never build a real image, run a workflow, or
+``check_compose`` / ``check_ci_yaml`` / ``check_terraform`` / ``check_k8s`` never
+build a real image, run a workflow, ``terraform validate``, ``kubeconform``, or
 make a network request; they parse the artifact text and apply documented
 heuristics. The genuine build+probe lives in
 :class:`verifier.backends.LocalDockerVerifier`.
@@ -40,8 +41,9 @@ Kind dispatch
 -------------
 The static path is :class:`ArtifactKind`-aware. :func:`check_artifact` routes by
 ``spec.kind`` (``DOCKERFILE`` -> :func:`check_dockerfile`, ``COMPOSE`` ->
-:func:`check_compose`, ``CI_YAML`` -> :func:`check_ci_yaml`, default -> Dockerfile
-to preserve historical behavior), and :func:`build_python_harness` inlines the
+:func:`check_compose`, ``CI_YAML`` -> :func:`check_ci_yaml`, ``TERRAFORM`` ->
+:func:`check_terraform`, ``K8S`` -> :func:`check_k8s`, default -> Dockerfile to
+preserve historical behavior), and :func:`build_python_harness` inlines the
 *right* check body for the kind via a small registry. Each kind contributes a
 stdlib-only ``_run_*_checks`` body that takes already-extracted params (never a
 ``VerifySpec``) so it string-inlines.
@@ -59,6 +61,8 @@ __all__ = [
     "check_dockerfile",
     "check_compose",
     "check_ci_yaml",
+    "check_terraform",
+    "check_k8s",
     "check_artifact",
     "build_python_harness",
     "parse_harness_output",
@@ -900,16 +904,403 @@ def check_ci_yaml(artifact: str, spec: VerifySpec) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Terraform (HCL) check logic (kind == TERRAFORM).
+#
+# HCL, not YAML: this path parses with regex (stdlib only). Like the compose /
+# ci-yaml paths it is a documented stand-in -- it does NOT run ``terraform
+# validate`` / ``terraform plan`` and does NOT import ``python-hcl2``. It depends
+# only on ``re`` + plain types and takes already-extracted params (not a
+# VerifySpec) so it string-inlines into the self-contained harness exactly like
+# ``_run_compose_checks``.
+# ---------------------------------------------------------------------------
+
+# Regex for an HCL ``resource "<type>" "<name>" {`` block opener. The block body
+# is irrelevant for our heuristic -- we only need to know a real resource exists.
+_TF_RESOURCE_RE = re.compile(r'resource\s+"[^"]+"\s+"[^"]+"\s*\{')
+_TF_TERRAFORM_BLOCK_RE = re.compile(r'(^|\n)\s*terraform\s*\{')
+_TF_PROVIDER_BLOCK_RE = re.compile(r'(^|\n)\s*provider\s+"[^"]+"\s*\{')
+
+
+def _strip_hcl_comments(text: str) -> str:
+    """Drop HCL line comments (``#`` and ``//``) so structural regexes ignore them.
+
+    Keeps the line (blanked) so line numbers/indentation are unaffected. A
+    documented simplification: it does not handle ``#``/``//`` inside string
+    literals, which is fine for our heuristic structural detection. ``must_contain``
+    is still matched against the *raw* text so a parrot cannot hide required tokens
+    in comments to dodge the spec_gaming signal.
+    """
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = re.sub(r"(#|//).*$", "", raw)
+        out.append(line)
+    return "\n".join(out)
+
+
+def _tf_resources_of_type(text: str, resource_type: str) -> int:
+    """Count ``resource "<resource_type>" "<name>" {`` blocks (any name).
+
+    Operates on comment-stripped text so a commented-out ``resource`` block does
+    not count as a real one.
+    """
+    code = _strip_hcl_comments(text)
+    pat = re.compile(rf'resource\s+"{re.escape(resource_type)}"\s+"[^"]+"\s*\{{')
+    return len(pat.findall(code))
+
+
+def _run_terraform_checks(
+    artifact: str,
+    *,
+    must_contain: list[str],
+    resource_type: str | None,
+    port: int | None,
+) -> dict[str, Any]:
+    """Core deterministic Terraform/HCL analysis (stdlib-only, no VerifySpec).
+
+    Returns ``{"build_ok", "smoke_ok", "signals", "reasons"}`` (the same contract
+    as :func:`_run_compose_checks`). A documented heuristic stand-in -- it does
+    NOT run ``terraform validate``/``plan``; it parses the HCL with regex. This is
+    the body inlined into the harness for ``ArtifactKind.TERRAFORM``.
+
+    Heuristics:
+      * ``build_ok`` -- a ``terraform {`` block OR a ``provider "..." {`` block is
+        present; at least one ``resource "<type>" "<name>" {`` block is present;
+        and all ``must_contain`` substrings are present (case-sensitive).
+      * ``smoke_ok`` -- ``build_ok`` AND (if ``resource_type`` is given) a
+        ``resource "<resource_type>" "..." {`` block exists AND (if ``port`` is
+        given) the bare port number appears anywhere in the config (a
+        resource/ports/publish context -- we accept the literal number, since we
+        cannot truly plan statically).
+      * ``signals.spec_gaming`` -- the artifact ticks every ``must_contain`` token
+        yet has NO real resource block (no ``resource "<t>" "<n>" {``): the
+        trivial token-parroting cheat (mirrors the compose/ci-yaml intent). NOTE:
+        keyed on the absence of a real resource block, NOT on must_contain tokens
+        (a parrot satisfies those by definition).
+    """
+    reasons: list[str] = []
+    text = artifact or ""
+    # Structural detection ignores comments; must_contain still uses raw text.
+    code = _strip_hcl_comments(text)
+
+    has_terraform_block = bool(_TF_TERRAFORM_BLOCK_RE.search(code))
+    has_provider = bool(_TF_PROVIDER_BLOCK_RE.search(code))
+    resource_count = len(_TF_RESOURCE_RE.findall(code))
+
+    # --- syntax sanity -----------------------------------------------------
+    if not (has_terraform_block or has_provider):
+        reasons.append("no 'terraform {' or 'provider \"...\" {' block")
+    if resource_count == 0:
+        reasons.append("no 'resource \"<type>\" \"<name>\" {' block")
+
+    # --- must_contain ------------------------------------------------------
+    missing_required: list[str] = []
+    for token in must_contain or []:
+        if token not in text:  # case-sensitive substring match
+            missing_required.append(token)
+    if missing_required:
+        reasons.append(f"missing required tokens: {missing_required}")
+
+    # --- build_ok decision -------------------------------------------------
+    build_ok = bool(
+        (has_terraform_block or has_provider)
+        and resource_count > 0
+        and not missing_required
+    )
+
+    # --- smoke_ok decision -------------------------------------------------
+    # (a) a resource of the requested type exists.
+    resource_type_ok = True
+    if resource_type:
+        resource_type_ok = _tf_resources_of_type(text, resource_type) > 0
+        if not resource_type_ok:
+            reasons.append(f"no resource of type {resource_type!r}")
+
+    # (b) the requested port number appears in the config (resource/ports
+    #     context). We accept the bare number -- a static stand-in cannot plan.
+    port_ok = True
+    if port is not None:
+        port_ok = bool(re.search(rf"(^|[^0-9]){port}([^0-9]|$)", text))
+        if not port_ok:
+            reasons.append(f"port {port} not referenced in the config")
+
+    smoke_ok = bool(build_ok and resource_type_ok and port_ok)
+
+    # --- spec-gaming detection --------------------------------------------
+    # Ticks every must_contain token but has no real resource block anywhere: the
+    # trivial token-parroting cheat. Keyed on resource_count (a real body), NOT on
+    # must_contain tokens (a parrot satisfies those by definition).
+    has_real_resource = resource_count > 0
+    satisfies_tokens = bool(must_contain) and not missing_required
+    spec_gaming = bool(satisfies_tokens and not has_real_resource)
+    if spec_gaming:
+        reasons.append(
+            "spec_gaming: ticks must_contain without a real resource "
+            "(no 'resource \"<type>\" \"<name>\" {' block)"
+        )
+
+    signals: dict[str, Any] = {
+        "has_terraform_block": has_terraform_block,
+        "has_provider": has_provider,
+        "resource_count": resource_count,
+        "resource_type_ok": resource_type_ok,
+        "port_ok": port_ok,
+        "spec_gaming": spec_gaming,
+        "missing_required": missing_required,
+    }
+    return {
+        "build_ok": build_ok,
+        "smoke_ok": smoke_ok,
+        "signals": signals,
+        "reasons": reasons,
+    }
+
+
+def _terraform_smoke_params(spec: VerifySpec) -> dict[str, Any]:
+    """Extract the terraform harness params from a VerifySpec's ``smoke`` dict."""
+    smoke = spec.smoke or {}
+    port = smoke.get("port")
+    try:
+        port = int(port) if port is not None else None
+    except (TypeError, ValueError):
+        port = None
+    return {
+        "must_contain": list(smoke.get("must_contain", []) or []),
+        "resource_type": smoke.get("resource_type"),
+        "port": port,
+    }
+
+
+def check_terraform(artifact: str, spec: VerifySpec) -> dict[str, Any]:
+    """Statically analyze a Terraform (HCL) artifact against ``spec``.
+
+    Returns ``{"build_ok": bool, "smoke_ok": bool, "signals": {...},
+    "reasons": [...]}`` -- the same shape as :func:`check_dockerfile` /
+    :func:`check_compose`. A deterministic heuristic (no real ``terraform
+    validate``/``plan``, no ``python-hcl2`` import); see
+    :func:`_run_terraform_checks` for the documented heuristics. Reads
+    ``spec.smoke`` keys ``must_contain`` (list[str]), ``resource_type``
+    (str|None), and ``port`` (int|None).
+    """
+    params = _terraform_smoke_params(spec)
+    return _run_terraform_checks(artifact, **params)
+
+
+# ---------------------------------------------------------------------------
+# Kubernetes (YAML manifests) check logic (kind == K8S).
+#
+# Multi-doc YAML (split on ``^---$``). Like the compose / ci-yaml paths it is a
+# documented stand-in: it does NOT run ``kubeconform`` / ``kubectl apply
+# --dry-run`` and does NOT import PyYAML -- it parses the manifest(s) with the
+# same indentation/substring/regex heuristics so it string-inlines into the
+# self-contained harness exactly like ``_run_compose_checks``. Depends only on
+# ``re`` + plain types and takes already-extracted params (not a VerifySpec).
+# ---------------------------------------------------------------------------
+
+# Default kinds the smoke decision expects a real app manifest set to declare.
+_K8S_DEFAULT_KINDS_REQUIRED = ("Deployment", "Service")
+
+
+def _k8s_documents(text: str) -> list[str]:
+    """Split a multi-doc YAML stream into its document sections.
+
+    Splits on a ``---`` line (the YAML document separator, optionally with
+    trailing spaces) and drops sections that are entirely blank/comments. Each
+    returned chunk is one manifest document's raw text.
+    """
+    docs: list[str] = []
+    cur: list[str] = []
+    for raw in text.splitlines():
+        if re.match(r"^\s*---\s*$", raw):
+            docs.append("\n".join(cur))
+            cur = []
+            continue
+        cur.append(raw)
+    docs.append("\n".join(cur))
+    out: list[str] = []
+    for doc in docs:
+        meaningful = [
+            ln for ln in doc.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
+        ]
+        if meaningful:
+            out.append(doc)
+    return out
+
+
+def _run_k8s_checks(
+    artifact: str,
+    *,
+    must_contain: list[str],
+    port: int | None,
+    health_path: str | None,
+    kinds_required: list[str],
+) -> dict[str, Any]:
+    """Core deterministic Kubernetes manifest analysis (stdlib-only, no VerifySpec).
+
+    Returns ``{"build_ok", "smoke_ok", "signals", "reasons"}`` (the same contract
+    as :func:`_run_compose_checks`). A documented heuristic stand-in -- it does
+    NOT run ``kubeconform``/``kubectl``; it parses the multi-doc YAML by
+    indentation/substring/regex. This is the body inlined into the harness for
+    ``ArtifactKind.K8S``.
+
+    Heuristics:
+      * ``build_ok`` -- >= 1 manifest document present; every document declares
+        ``apiVersion:``, ``kind:`` and ``metadata:``; and all ``must_contain``
+        substrings are present (case-sensitive).
+      * ``smoke_ok`` -- ``build_ok`` AND each kind in ``kinds_required`` (default
+        ``["Deployment","Service"]``) appears as a ``kind: <X>`` value AND (if a
+        ``port`` is given) the port number appears (e.g. ``containerPort:`` /
+        ``port:`` / ``targetPort:``) AND (if a ``health_path`` is given) it
+        appears in the text OR a ``livenessProbe``/``readinessProbe`` block is
+        present.
+      * ``signals.spec_gaming`` -- the artifact ticks every ``must_contain`` token
+        yet has NO real manifest body (no ``spec:`` block anywhere): the trivial
+        token-parroting cheat (mirrors the compose/ci-yaml intent). NOTE: keyed on
+        the absence of a ``spec:`` block, NOT on must_contain tokens (a parrot
+        satisfies those by definition).
+    """
+    reasons: list[str] = []
+    text = artifact or ""
+    docs = _k8s_documents(text)
+    manifest_count = len(docs)
+
+    # --- every document declares apiVersion / kind / metadata --------------
+    docs_well_formed = True
+    for doc in docs:
+        keys = _top_level_keys(doc)
+        if not ("apiVersion" in keys and "kind" in keys and "metadata" in keys):
+            docs_well_formed = False
+    if manifest_count == 0:
+        reasons.append("no manifest document present")
+    elif not docs_well_formed:
+        reasons.append("a manifest is missing apiVersion:/kind:/metadata:")
+
+    # --- must_contain ------------------------------------------------------
+    missing_required: list[str] = []
+    for token in must_contain or []:
+        if token not in text:  # case-sensitive substring match
+            missing_required.append(token)
+    if missing_required:
+        reasons.append(f"missing required tokens: {missing_required}")
+
+    # --- build_ok decision -------------------------------------------------
+    build_ok = bool(
+        manifest_count > 0
+        and docs_well_formed
+        and not missing_required
+    )
+
+    # --- smoke_ok decision -------------------------------------------------
+    # (a) each required kind appears as a ``kind: <X>`` value.
+    kinds_found = sorted(
+        {m.group(1) for m in re.finditer(r"(?m)^\s*kind\s*:\s*([A-Za-z0-9_-]+)\s*$", text)}
+    )
+    required_kinds = list(kinds_required) if kinds_required else list(_K8S_DEFAULT_KINDS_REQUIRED)
+    missing_kinds = [k for k in required_kinds if k not in kinds_found]
+    if missing_kinds:
+        reasons.append(f"missing required kinds: {missing_kinds}")
+
+    # (b) the requested port number appears (containerPort:/port:/targetPort:).
+    port_ok = True
+    if port is not None:
+        port_ok = bool(
+            re.search(rf"(^|[^0-9]){port}([^0-9]|$)", text)
+            and re.search(r"(^|\n)\s*(containerPort|port|targetPort)\s*:", text)
+        )
+        if not port_ok:
+            reasons.append(f"port {port} not referenced under a port field")
+
+    # (c) health path is referenced, or a liveness/readiness probe is present.
+    has_probe = bool(re.search(r"(^|\n)\s*(livenessProbe|readinessProbe)\s*:", text))
+    probe_ok = True
+    if health_path:
+        probe_ok = (health_path in text) or has_probe
+        if not probe_ok:
+            reasons.append(
+                f"health_path {health_path!r} not referenced and no liveness/readiness probe"
+            )
+
+    smoke_ok = bool(build_ok and not missing_kinds and port_ok and probe_ok)
+
+    # --- spec-gaming detection --------------------------------------------
+    # Ticks every must_contain token but has no real manifest body anywhere (no
+    # ``spec:`` block): the trivial token-parroting cheat. Keyed on the absence of
+    # a ``spec:`` block (a real body), NOT on must_contain tokens (a parrot
+    # satisfies those by definition).
+    has_spec = bool(re.search(r"(^|\n)\s*spec\s*:", text))
+    satisfies_tokens = bool(must_contain) and not missing_required
+    spec_gaming = bool(satisfies_tokens and not has_spec)
+    if spec_gaming:
+        reasons.append(
+            "spec_gaming: ticks must_contain without a real manifest body "
+            "(no 'spec:' block)"
+        )
+
+    signals: dict[str, Any] = {
+        "manifest_count": manifest_count,
+        "kinds_found": kinds_found,
+        "has_spec": has_spec,
+        "port_ok": port_ok,
+        "probe_ok": probe_ok,
+        "spec_gaming": spec_gaming,
+        "missing_required": missing_required,
+    }
+    return {
+        "build_ok": build_ok,
+        "smoke_ok": smoke_ok,
+        "signals": signals,
+        "reasons": reasons,
+    }
+
+
+def _k8s_smoke_params(spec: VerifySpec) -> dict[str, Any]:
+    """Extract the k8s harness params from a VerifySpec's ``smoke`` dict."""
+    smoke = spec.smoke or {}
+    port = smoke.get("port")
+    try:
+        port = int(port) if port is not None else None
+    except (TypeError, ValueError):
+        port = None
+    kinds_required = smoke.get("kinds_required")
+    if kinds_required:
+        kinds_required = list(kinds_required)
+    else:
+        kinds_required = list(_K8S_DEFAULT_KINDS_REQUIRED)
+    return {
+        "must_contain": list(smoke.get("must_contain", []) or []),
+        "port": port,
+        "health_path": smoke.get("health_path"),
+        "kinds_required": kinds_required,
+    }
+
+
+def check_k8s(artifact: str, spec: VerifySpec) -> dict[str, Any]:
+    """Statically analyze a Kubernetes (YAML manifests) artifact against ``spec``.
+
+    Returns ``{"build_ok": bool, "smoke_ok": bool, "signals": {...},
+    "reasons": [...]}`` -- the same shape as :func:`check_dockerfile` /
+    :func:`check_compose`. A deterministic heuristic (no real ``kubeconform`` /
+    ``kubectl`` run, no PyYAML import); see :func:`_run_k8s_checks` for the
+    documented heuristics. Reads ``spec.smoke`` keys ``must_contain`` (list[str]),
+    ``port`` (int|None), ``health_path`` (str|None), and ``kinds_required``
+    (list[str], default ``["Deployment","Service"]``).
+    """
+    params = _k8s_smoke_params(spec)
+    return _run_k8s_checks(artifact, **params)
+
+
+# ---------------------------------------------------------------------------
 # Kind dispatch (in-process static path).
 # ---------------------------------------------------------------------------
 def check_artifact(artifact: str, spec: VerifySpec) -> dict[str, Any]:
     """Statically analyze ``artifact`` by ``spec.kind``.
 
     Routes ``ArtifactKind.DOCKERFILE`` -> :func:`check_dockerfile`,
-    ``ArtifactKind.COMPOSE`` -> :func:`check_compose`, and
-    ``ArtifactKind.CI_YAML`` -> :func:`check_ci_yaml`. Any other kind falls back
-    to the Dockerfile path, preserving the historical behavior for kinds that
-    reach the static path today. Returns the common
+    ``ArtifactKind.COMPOSE`` -> :func:`check_compose`,
+    ``ArtifactKind.CI_YAML`` -> :func:`check_ci_yaml`,
+    ``ArtifactKind.TERRAFORM`` -> :func:`check_terraform`, and
+    ``ArtifactKind.K8S`` -> :func:`check_k8s`. Any other kind falls back to the
+    Dockerfile path, preserving the historical behavior for kinds that reach the
+    static path today. Returns the common
     ``{"build_ok","smoke_ok","signals","reasons"}`` shape.
     """
     from verifier.types import ArtifactKind  # local import: keep module light
@@ -918,6 +1309,10 @@ def check_artifact(artifact: str, spec: VerifySpec) -> dict[str, Any]:
         return check_compose(artifact, spec)
     if spec.kind == ArtifactKind.CI_YAML:
         return check_ci_yaml(artifact, spec)
+    if spec.kind == ArtifactKind.TERRAFORM:
+        return check_terraform(artifact, spec)
+    if spec.kind == ArtifactKind.K8S:
+        return check_k8s(artifact, spec)
     return check_dockerfile(artifact, spec)
 
 
@@ -970,9 +1365,42 @@ _CI_YAML_MAIN_BODY = '''\
             required_steps={required_steps!r},
         )'''
 
+_TERRAFORM_MAIN_BODY = '''\
+        _ARTIFACT = {artifact!r}
+        result = _run_terraform_checks(
+            _ARTIFACT,
+            must_contain={must_contain!r},
+            resource_type={resource_type!r},
+            port={port!r},
+        )'''
+
+_K8S_MAIN_BODY = '''\
+        _ARTIFACT = {artifact!r}
+        result = _run_k8s_checks(
+            _ARTIFACT,
+            must_contain={must_contain!r},
+            port={port!r},
+            health_path={health_path!r},
+            kinds_required={kinds_required!r},
+        )'''
+
 # Constant the ci-yaml check closes over (inlined only for that kind).
 _CI_YAML_CONST_SOURCE = (
     "_CI_DEFAULT_REQUIRED_STEPS = " + repr(_CI_DEFAULT_REQUIRED_STEPS) + "\n"
+)
+
+# Module-level regexes the terraform check closes over (inlined only for that
+# kind). Each is reconstructed from its pattern string so the harness has its
+# own copies (no reliance on ``verifier.smoke.checks`` being importable).
+_TERRAFORM_CONST_SOURCE = (
+    "_TF_RESOURCE_RE = re.compile(" + repr(_TF_RESOURCE_RE.pattern) + ")\n"
+    "_TF_TERRAFORM_BLOCK_RE = re.compile(" + repr(_TF_TERRAFORM_BLOCK_RE.pattern) + ")\n"
+    "_TF_PROVIDER_BLOCK_RE = re.compile(" + repr(_TF_PROVIDER_BLOCK_RE.pattern) + ")\n"
+)
+
+# Constant the k8s check closes over (inlined only for that kind).
+_K8S_CONST_SOURCE = (
+    "_K8S_DEFAULT_KINDS_REQUIRED = " + repr(_K8S_DEFAULT_KINDS_REQUIRED) + "\n"
 )
 
 
@@ -1011,6 +1439,18 @@ def _harness_registry() -> dict[str, _HarnessKind]:
             const_source=_CI_YAML_CONST_SOURCE,
             smoke_params=_ci_yaml_smoke_params,
             main_body=_CI_YAML_MAIN_BODY,
+        ),
+        ArtifactKind.TERRAFORM.value: _HarnessKind(
+            funcs=(_strip_hcl_comments, _tf_resources_of_type, _run_terraform_checks),
+            const_source=_TERRAFORM_CONST_SOURCE,
+            smoke_params=_terraform_smoke_params,
+            main_body=_TERRAFORM_MAIN_BODY,
+        ),
+        ArtifactKind.K8S.value: _HarnessKind(
+            funcs=(_top_level_keys, _k8s_documents, _run_k8s_checks),
+            const_source=_K8S_CONST_SOURCE,
+            smoke_params=_k8s_smoke_params,
+            main_body=_K8S_MAIN_BODY,
         ),
     }
 
@@ -1067,8 +1507,9 @@ def build_python_harness(artifact: str, spec: VerifySpec) -> str:
 
     Dispatches on ``spec.kind`` via the harness registry: ``DOCKERFILE`` inlines
     the Dockerfile heuristics (unchanged), ``COMPOSE`` inlines the compose ones,
-    ``CI_YAML`` inlines the GitHub Actions workflow ones. Any other kind falls
-    back to the Dockerfile path (matching :func:`check_artifact`). Use
+    ``CI_YAML`` inlines the GitHub Actions workflow ones, ``TERRAFORM`` inlines
+    the HCL ones, ``K8S`` inlines the Kubernetes manifest ones. Any other kind
+    falls back to the Dockerfile path (matching :func:`check_artifact`). Use
     :func:`parse_harness_output` to recover the JSON.
     """
     from verifier.types import ArtifactKind

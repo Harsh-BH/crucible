@@ -12,14 +12,22 @@ from __future__ import annotations
 
 from . import gold, impossible, parser, scaffold, tasks
 from .environment import load_environment
-from .gold import gold_ci_yaml, gold_compose, gold_dockerfile
+from .gold import gold_ci_yaml, gold_compose, gold_dockerfile, gold_k8s, gold_terraform
 from .impossible import MUTATIONS, Adversary, adversarial_corpus, impossible_tasks
-from .parser import extract_ci_yaml, extract_compose, extract_dockerfile
+from .parser import (
+    extract_ci_yaml,
+    extract_compose,
+    extract_dockerfile,
+    extract_k8s,
+    extract_terraform,
+)
 from .scaffold import app_scaffold
 from .tasks import (
     CI_YAML_SYSTEM_PROMPT,
     COMPOSE_SYSTEM_PROMPT,
+    K8S_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
+    TERRAFORM_SYSTEM_PROMPT,
     build_verify_spec,
     generate_tasks,
 )
@@ -36,9 +44,13 @@ __all__ = [
     "gold_dockerfile",
     "gold_compose",
     "gold_ci_yaml",
+    "gold_terraform",
+    "gold_k8s",
     "extract_dockerfile",
     "extract_compose",
     "extract_ci_yaml",
+    "extract_terraform",
+    "extract_k8s",
     "app_scaffold",
     "impossible_tasks",
     "adversarial_corpus",
@@ -47,4 +59,6 @@ __all__ = [
     "SYSTEM_PROMPT",
     "COMPOSE_SYSTEM_PROMPT",
     "CI_YAML_SYSTEM_PROMPT",
+    "TERRAFORM_SYSTEM_PROMPT",
+    "K8S_SYSTEM_PROMPT",
 ]

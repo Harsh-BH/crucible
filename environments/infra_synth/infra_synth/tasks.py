@@ -128,6 +128,35 @@ CI_YAML_SYSTEM_PROMPT = (
     "suite (pytest).\n"
 )
 
+TERRAFORM_SYSTEM_PROMPT = (
+    "You are an expert platform engineer. Given an infrastructure specification, "
+    "produce a single, correct Terraform (HCL) configuration that satisfies it.\n\n"
+    "Output rules (strict):\n"
+    "- Respond with ONLY one Terraform configuration, wrapped in a single ```hcl "
+    "fenced code block.\n"
+    "- Do NOT include any prose, explanation, commentary, or <think> blocks before "
+    "or after the block.\n"
+    "- Declare a `terraform { ... }` block and a `provider \"docker\" {}` block.\n"
+    "- Define a `resource \"docker_image\" \"...\" { ... }` that builds the app and "
+    "a `resource \"docker_container\" \"...\" { ... }` that runs it.\n"
+    "- Publish the requested port (map it under the container's `ports { ... }` "
+    "block as `internal`/`external`).\n"
+)
+
+K8S_SYSTEM_PROMPT = (
+    "You are an expert platform engineer. Given an infrastructure specification, "
+    "produce correct Kubernetes manifests that satisfy it.\n\n"
+    "Output rules (strict):\n"
+    "- Respond with ONLY the Kubernetes manifests, wrapped in a single ```yaml "
+    "fenced code block (use `---` to separate documents).\n"
+    "- Do NOT include any prose, explanation, commentary, or <think> blocks before "
+    "or after the block.\n"
+    "- Each document must declare `apiVersion:`, `kind:`, and `metadata:`.\n"
+    "- Provide a `Deployment` (with a container that sets `containerPort:` to the "
+    "requested port and a `livenessProbe` probing the health path) and a "
+    "matching `Service`.\n"
+)
+
 
 # ---------------------------------------------------------------------------
 # Grid enumeration + split
@@ -378,6 +407,128 @@ def _ci_yaml_info_for(
     }
 
 
+def _render_terraform_question(combo: tuple[str, str, str, int, str]) -> str:
+    """Render a natural-language Terraform (HCL) spec for one parameter combo.
+
+    Terraform here provisions a Docker image + container for the web service via
+    the ``kreuzwerker/docker`` provider; the language / framework drive only the
+    rendered flavor (the structure is what ``check_terraform`` grades). The combo
+    health-path is unused (no probe in this stand-in); only ``port`` matters.
+    """
+    language, framework, _dependency, port, _health = combo
+    lang_meta = LANGUAGES[language]
+    fw_meta = FRAMEWORKS[framework]
+    return (
+        f"Write a Terraform (HCL) configuration that provisions a "
+        f"{fw_meta['display']} {lang_meta['display']} web service as a Docker "
+        f"container using the `kreuzwerker/docker` provider. Declare a "
+        f"`terraform` block with the required provider, a `provider \"docker\"` "
+        f"block, a `docker_image` resource that builds the app image from the "
+        f"local context, and a `docker_container` resource that runs it and "
+        f"publishes port {port} (map {port}:{port})."
+    )
+
+
+def _terraform_info_for(
+    combo: tuple[str, str, str, int, str], spec_id: str
+) -> dict[str, Any]:
+    """Build the terraform ``info`` dict (the pipeline's source of truth).
+
+    Mirrors :func:`_compose_info_for` but targets ``ArtifactKind.TERRAFORM`` and
+    the ``check_terraform`` smoke contract: ``must_contain`` (the case-sensitive
+    substring gate), ``resource_type`` (the smoke-gated resource type), and
+    ``port`` (the published port). Terraform ignores framework-server specifics,
+    so there is intentionally NO ``health_path`` in the smoke block.
+    """
+    language, framework, dependency, port, _health = combo
+    fw_meta = FRAMEWORKS[framework]
+
+    return {
+        "spec_id": spec_id,
+        "kind": ArtifactKind.TERRAFORM.value,  # "terraform"
+        # Grid parameters (also used by gold.py to render a reference flavor).
+        "language": language,
+        "framework": framework,
+        "dependency": dependency,
+        "packages": list(fw_meta["packages"]),
+        "dep_packages": list(DEPENDENCIES[dependency]["packages"]),
+        "app_target": fw_meta["app_target"],
+        "server": fw_meta["server"],
+        # Smoke-test parameters consumed when constructing a VerifySpec. The
+        # locked terraform contract: must_contain + resource_type + port.
+        "smoke": {
+            "must_contain": [
+                "terraform",
+                'provider "docker"',
+                'resource "docker_image"',
+                'resource "docker_container"',
+            ],
+            "resource_type": "docker_container",
+            "port": port,
+        },
+    }
+
+
+def _render_k8s_question(combo: tuple[str, str, str, int, str]) -> str:
+    """Render a natural-language Kubernetes spec for one parameter combo.
+
+    The language / framework drive the rendered flavor; the structure (a
+    Deployment + Service, the container port, and a probe on the health path) is
+    what ``check_k8s`` grades.
+    """
+    language, framework, _dependency, port, health = combo
+    lang_meta = LANGUAGES[language]
+    fw_meta = FRAMEWORKS[framework]
+    return (
+        f"Write Kubernetes manifests that deploy a {fw_meta['display']} "
+        f"{lang_meta['display']} web service: a `Deployment` whose container "
+        f"listens on port {port} (`containerPort: {port}`) and declares a "
+        f"`livenessProbe` that probes `{health}`, plus a matching `Service` that "
+        f"exposes port {port}. Each manifest must declare apiVersion, kind, and "
+        f"metadata; separate documents with `---`."
+    )
+
+
+def _k8s_info_for(
+    combo: tuple[str, str, str, int, str], spec_id: str
+) -> dict[str, Any]:
+    """Build the k8s ``info`` dict (the pipeline's source of truth).
+
+    Mirrors :func:`_compose_info_for` but targets ``ArtifactKind.K8S`` and the
+    ``check_k8s`` smoke contract: ``must_contain`` (the case-sensitive substring
+    gate), ``port`` / ``health_path`` (the probe gate), and ``kinds_required``
+    (the document kinds the manifest set must declare).
+    """
+    language, framework, dependency, port, health = combo
+    fw_meta = FRAMEWORKS[framework]
+
+    return {
+        "spec_id": spec_id,
+        "kind": ArtifactKind.K8S.value,  # "k8s"
+        # Grid parameters (also used by gold.py to render a reference flavor).
+        "language": language,
+        "framework": framework,
+        "dependency": dependency,
+        "packages": list(fw_meta["packages"]),
+        "dep_packages": list(DEPENDENCIES[dependency]["packages"]),
+        "app_target": fw_meta["app_target"],
+        "server": fw_meta["server"],
+        # Smoke-test parameters consumed when constructing a VerifySpec. The
+        # locked k8s contract: must_contain + port + health_path + kinds_required.
+        "smoke": {
+            "must_contain": [
+                "apiVersion:",
+                "kind: Deployment",
+                "kind: Service",
+                "containerPort:",
+            ],
+            "port": port,
+            "health_path": health,
+            "kinds_required": ["Deployment", "Service"],
+        },
+    }
+
+
 def _gold_hint(combo: tuple[str, str, str, int, str]) -> str:
     """Short 'answer' hint stored per task — the canonical base image tag."""
     language = combo[0]
@@ -404,10 +555,12 @@ def generate_tasks(
     ``kind`` selects the target artifact: ``"dockerfile"`` (the default — output
     is byte-for-byte identical to the historical no-``kind`` behavior),
     ``"compose"`` (a ``docker-compose.yml`` NL spec + the ``check_compose`` smoke
-    contract), or ``"ci-yaml"`` (a GitHub Actions workflow NL spec + the
-    ``check_ci_yaml`` smoke contract). The ``kind`` is folded into the
-    ``spec_id`` for non-Dockerfile kinds so Dockerfile, Compose, and CI task ids
-    never collide.
+    contract), ``"ci-yaml"`` (a GitHub Actions workflow NL spec + the
+    ``check_ci_yaml`` smoke contract), ``"terraform"`` (an HCL config NL spec +
+    the ``check_terraform`` smoke contract), or ``"k8s"`` (Kubernetes manifests
+    NL spec + the ``check_k8s`` smoke contract). The ``kind`` is folded into the
+    ``spec_id`` for non-Dockerfile kinds (``compose-`` / ``ci-`` / ``tf-`` /
+    ``k8s-``) so the per-kind task ids never collide.
 
     ``n`` caps the number of tasks (``None`` -> use the whole split pool). If
     ``n`` exceeds the pool size we return the whole pool (no duplication).
@@ -416,9 +569,12 @@ def generate_tasks(
         ArtifactKind.DOCKERFILE.value,
         ArtifactKind.COMPOSE.value,
         ArtifactKind.CI_YAML.value,
+        ArtifactKind.TERRAFORM.value,
+        ArtifactKind.K8S.value,
     ):
         raise ValueError(
-            f"unknown kind {kind!r} (expected 'dockerfile', 'compose', or 'ci-yaml')"
+            f"unknown kind {kind!r} (expected 'dockerfile', 'compose', 'ci-yaml', "
+            f"'terraform', or 'k8s')"
         )
 
     pool = _split_combos(split)
@@ -432,6 +588,8 @@ def generate_tasks(
 
     is_compose = kind == ArtifactKind.COMPOSE.value
     is_ci_yaml = kind == ArtifactKind.CI_YAML.value
+    is_terraform = kind == ArtifactKind.TERRAFORM.value
+    is_k8s = kind == ArtifactKind.K8S.value
     tasks: list[dict[str, Any]] = []
     for i, combo in enumerate(pool):
         base_id = f"{split}-{seed}-{i:04d}-{combo[0]}-{combo[1]}-{combo[2]}-{combo[3]}"
@@ -443,6 +601,14 @@ def generate_tasks(
             spec_id = f"ci-{base_id}"
             question = _render_ci_yaml_question(combo)
             info = _ci_yaml_info_for(combo, spec_id)
+        elif is_terraform:
+            spec_id = f"tf-{base_id}"
+            question = _render_terraform_question(combo)
+            info = _terraform_info_for(combo, spec_id)
+        elif is_k8s:
+            spec_id = f"k8s-{base_id}"
+            question = _render_k8s_question(combo)
+            info = _k8s_info_for(combo, spec_id)
         else:
             # Dockerfile path: unchanged spec_id / question / info (byte-for-byte).
             spec_id = base_id
@@ -509,6 +675,8 @@ __all__ = [
     "SYSTEM_PROMPT",
     "COMPOSE_SYSTEM_PROMPT",
     "CI_YAML_SYSTEM_PROMPT",
+    "TERRAFORM_SYSTEM_PROMPT",
+    "K8S_SYSTEM_PROMPT",
     "TASK_NAME",
     "LANGUAGES",
     "FRAMEWORKS",

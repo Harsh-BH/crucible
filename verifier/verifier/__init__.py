@@ -22,7 +22,8 @@ PUBLIC API
                                  binary=False) -> float`` and
                                  ``result_to_metrics(result)``.
 - ``verifier.smoke.checks``    : ``check_dockerfile`` / ``check_compose`` /
-                                 ``check_ci_yaml`` / ``check_artifact`` (kind
+                                 ``check_ci_yaml`` / ``check_terraform`` /
+                                 ``check_k8s`` / ``check_artifact`` (kind
                                  dispatch) / ``build_python_harness`` /
                                  ``parse_harness_output`` (stdlib-only check
                                  logic shared by every backend).
@@ -57,6 +58,8 @@ from .smoke.checks import (
     check_ci_yaml,
     check_compose,
     check_dockerfile,
+    check_k8s,
+    check_terraform,
     parse_harness_output,
 )
 from .types import (
@@ -90,6 +93,8 @@ __all__ = [
     "check_dockerfile",
     "check_compose",
     "check_ci_yaml",
+    "check_terraform",
+    "check_k8s",
     "check_artifact",
     "build_python_harness",
     "parse_harness_output",

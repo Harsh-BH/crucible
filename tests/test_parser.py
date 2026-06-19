@@ -147,3 +147,84 @@ def test_ci_yaml_tolerates_prose() -> None:
 def test_ci_yaml_no_block_returns_empty() -> None:
     assert infra_parser.extract_ci_yaml("no code here at all") == ""
     assert infra_parser.extract_ci_yaml("") == ""
+
+
+# --- extract_terraform -----------------------------------------------------
+def test_terraform_single_hcl_block() -> None:
+    text = "Here:\n```hcl\nprovider \"docker\" {}\n```\n"
+    assert infra_parser.extract_terraform(text) == 'provider "docker" {}'
+
+
+def test_terraform_tf_tag() -> None:
+    text = '```tf\nresource "docker_container" "web" {}\n```'
+    assert infra_parser.extract_terraform(text) == 'resource "docker_container" "web" {}'
+
+
+def test_terraform_terraform_tag() -> None:
+    text = "```terraform\nterraform {\n}\n```"
+    assert infra_parser.extract_terraform(text) == "terraform {\n}"
+
+
+def test_terraform_takes_last_hcl_block() -> None:
+    text = (
+        'Draft:\n```hcl\nprovider "aws" {}\n```\n'
+        'Final:\n```hcl\nprovider "docker" {}\n```\n'
+    )
+    assert infra_parser.extract_terraform(text) == 'provider "docker" {}'
+
+
+def test_terraform_tolerates_prose() -> None:
+    text = (
+        "Let me think about the provider and resources...\n\n"
+        '```hcl\nterraform {}\nprovider "docker" {}\n'
+        'resource "docker_container" "web" {\n  ports {\n'
+        "    internal = 8000\n  }\n}\n```\n\n"
+        "Done."
+    )
+    out = infra_parser.extract_terraform(text)
+    assert out.startswith("terraform {}")
+    assert "Let me think" not in out
+    assert "internal = 8000" in out
+
+
+def test_terraform_no_block_returns_empty() -> None:
+    assert infra_parser.extract_terraform("no code here at all") == ""
+    assert infra_parser.extract_terraform("") == ""
+
+
+# --- extract_k8s -----------------------------------------------------------
+def test_k8s_single_yaml_block() -> None:
+    text = "Here:\n```yaml\napiVersion: apps/v1\nkind: Deployment\n```\n"
+    assert infra_parser.extract_k8s(text) == "apiVersion: apps/v1\nkind: Deployment"
+
+
+def test_k8s_yml_tag() -> None:
+    text = "```yml\napiVersion: v1\nkind: Service\n```"
+    assert infra_parser.extract_k8s(text) == "apiVersion: v1\nkind: Service"
+
+
+def test_k8s_takes_last_yaml_block() -> None:
+    text = (
+        "Draft:\n```yaml\nkind: Pod\n```\n"
+        "Final:\n```yaml\napiVersion: apps/v1\nkind: Deployment\n```\n"
+    )
+    assert infra_parser.extract_k8s(text) == "apiVersion: apps/v1\nkind: Deployment"
+
+
+def test_k8s_tolerates_prose() -> None:
+    text = (
+        "Let me think about the deployment and service...\n\n"
+        "```yaml\napiVersion: apps/v1\nkind: Deployment\nspec:\n"
+        "  template:\n    spec:\n      containers:\n"
+        "        - containerPort: 8000\n```\n\n"
+        "Done."
+    )
+    out = infra_parser.extract_k8s(text)
+    assert out.startswith("apiVersion: apps/v1")
+    assert "Let me think" not in out
+    assert "containerPort: 8000" in out
+
+
+def test_k8s_no_block_returns_empty() -> None:
+    assert infra_parser.extract_k8s("no code here at all") == ""
+    assert infra_parser.extract_k8s("") == ""

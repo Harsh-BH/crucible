@@ -120,6 +120,20 @@ MUTATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 #: Every mutation is a grader/spec weakness (DESIGN §3 categories 1–3 half).
 _MUTATION_CATEGORY: dict[str, str] = dict.fromkeys(MUTATIONS, WEAK_TESTS)
 
+#: Default mutation set per artifact kind. ``contradictory_port``/``_base`` are
+#: Dockerfile-specific (they speak ``EXPOSE``/``FROM``); ``impossible_token`` is
+#: kind-agnostic (it appends a marker no faithful artifact of ANY kind contains,
+#: so the gold reference always fails the ``must_contain`` gate). The other kinds
+#: therefore default to ``impossible_token`` — enough to guarantee the task is
+#: unsatisfiable (any pass == a cheat). Callers may override via ``mutations=``.
+_DEFAULT_MUTATIONS_BY_KIND: dict[str, list[str]] = {
+    "dockerfile": list(MUTATIONS),
+    "compose": ["impossible_token"],
+    "ci-yaml": ["impossible_token"],
+    "terraform": ["impossible_token"],
+    "k8s": ["impossible_token"],
+}
+
 
 def _deepcopy_info(info: dict[str, Any]) -> dict[str, Any]:
     """Return a deep copy of ``info`` (so ``smoke`` / lists are never shared)."""
@@ -131,34 +145,45 @@ def impossible_tasks(
     seed: int = 0,
     split: str = "test",
     mutations: list[str] | None = None,
+    kind: str = "dockerfile",
 ) -> list[dict[str, Any]]:
     """Return seeded tasks each mutated into an **unsatisfiable** spec.
 
     Starts from :func:`infra_synth.tasks.generate_tasks` (same ``n`` / ``seed`` /
-    ``split``), then applies ONE mutation per task, cycling through the selected
-    mutations deterministically by index. Each task's ``info`` is replaced by a
-    mutated deep copy carrying ``info["impossible"] = {"mutation": <name>,
-    "category": <category const>}``; the original ``generate_tasks`` output is
-    never mutated.
+    ``split`` / ``kind``), then applies ONE mutation per task, cycling through the
+    selected mutations deterministically by index. Each task's ``info`` is
+    replaced by a mutated deep copy carrying ``info["impossible"] =
+    {"mutation": <name>, "category": <category const>}``; the original
+    ``generate_tasks`` output is never mutated.
 
     Parameters
     ----------
     mutations:
-        Subset of :data:`MUTATIONS` keys to cycle through. ``None`` uses all of
-        :data:`MUTATIONS` (in definition order). Unknown names raise.
+        Subset of :data:`MUTATIONS` keys to cycle through. ``None`` selects the
+        default set for ``kind`` (:data:`_DEFAULT_MUTATIONS_BY_KIND`): all three
+        for ``dockerfile``, the kind-agnostic ``impossible_token`` for the other
+        kinds. Unknown names raise.
+    kind:
+        Artifact kind to generate before mutating (``"dockerfile"`` |
+        ``"compose"`` | ``"ci-yaml"`` | ``"terraform"`` | ``"k8s"``), forwarded
+        to :func:`infra_synth.tasks.generate_tasks`.
 
-    Determinism: for a given ``(n, seed, split, mutations)`` the result is
+    Determinism: for a given ``(n, seed, split, mutations, kind)`` the result is
     stable. The impossibility crux — that no faithful artifact (gold included)
-    passes — is proved in ``tests/test_impossible.py``.
+    passes the mutated spec under ``verifier.smoke.checks.check_artifact`` — is
+    proved per kind in ``tests/test_impossible.py``.
     """
-    names = list(MUTATIONS) if mutations is None else list(mutations)
+    if mutations is None:
+        names = _DEFAULT_MUTATIONS_BY_KIND.get(kind, ["impossible_token"])
+    else:
+        names = list(mutations)
     if not names:
-        raise ValueError("mutations must be non-empty (or None for all)")
+        raise ValueError("mutations must be non-empty (or None for the kind default)")
     unknown = [m for m in names if m not in MUTATIONS]
     if unknown:
         raise ValueError(f"unknown mutations {unknown!r}; valid: {sorted(MUTATIONS)}")
 
-    base = _tasks.generate_tasks(n=n, seed=seed, split=split)
+    base = _tasks.generate_tasks(n=n, seed=seed, split=split, kind=kind)
     # Deterministic order of assignment (independent of dict ordering quirks),
     # keyed by seed+split so it tracks the task selection.
     rng = random.Random(f"impossible:{seed}:{split}:{','.join(names)}")

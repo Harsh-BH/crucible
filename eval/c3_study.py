@@ -266,10 +266,10 @@ def default_trials(n: int = 12, *, include_dangerous: bool = False) -> list[Tria
 
     (a) the **adversarial corpus** -- one ``PYTHON``-kind :class:`Trial` per
         :func:`infra_synth.impossible.adversarial_corpus` entry; and
-    (b) the **impossible tasks** -- for each
-        :func:`infra_synth.impossible.impossible_tasks` task, one ``DOCKERFILE``
-        trial grading the *gold* reference
-        (:func:`infra_synth.gold.gold_dockerfile`) against its
+    (b) the **impossible tasks** -- across ALL artifact kinds (dockerfile,
+        compose, ci-yaml, terraform, k8s). For each
+        :func:`infra_synth.impossible.impossible_tasks` task, one trial grading
+        the *gold* reference for that kind against its
         (:func:`infra_synth.tasks.build_verify_spec`) unsatisfiable spec. Gold is
         the HONEST reference: it must FAIL the impossible spec, so a pass under
         either backend would expose a broken / exploited grader. Label
@@ -278,7 +278,13 @@ def default_trials(n: int = 12, *, include_dangerous: bool = False) -> list[Tria
     ``infra_synth`` is imported here (not at module top level) so the rest of the
     module -- and the core runner's tests -- run in CPU-only CI without it.
     """
-    from infra_synth.gold import gold_dockerfile
+    from infra_synth.gold import (
+        gold_ci_yaml,
+        gold_compose,
+        gold_dockerfile,
+        gold_k8s,
+        gold_terraform,
+    )
     from infra_synth.impossible import adversarial_corpus, impossible_tasks
     from infra_synth.tasks import build_verify_spec
 
@@ -295,18 +301,29 @@ def default_trials(n: int = 12, *, include_dangerous: bool = False) -> list[Tria
             )
         )
 
-    # (b) impossible tasks -> grade the gold reference against the mutated spec.
-    for task in impossible_tasks(n=n):
-        info = task["info"]
-        spec = build_verify_spec(info)
-        trials.append(
-            Trial(
-                label=f"task-gold:{spec.spec_id}",
-                category=info["impossible"]["category"],
-                artifact=gold_dockerfile(info),
-                spec=spec,
+    # (b) impossible tasks across every artifact kind -> grade the kind's gold
+    #     reference against the mutated (unsatisfiable) spec. n is split across
+    #     kinds so the study spans the full breadth without ballooning.
+    golds = {
+        "dockerfile": gold_dockerfile,
+        "compose": gold_compose,
+        "ci-yaml": gold_ci_yaml,
+        "terraform": gold_terraform,
+        "k8s": gold_k8s,
+    }
+    per_kind = max(1, n // len(golds))
+    for kind, gold_fn in golds.items():
+        for task in impossible_tasks(n=per_kind, kind=kind):
+            info = task["info"]
+            spec = build_verify_spec(info)
+            trials.append(
+                Trial(
+                    label=f"task-gold:{spec.spec_id}",
+                    category=info["impossible"]["category"],
+                    artifact=gold_fn(info),
+                    spec=spec,
+                )
             )
-        )
 
     return trials
 
