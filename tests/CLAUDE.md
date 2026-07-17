@@ -1,6 +1,6 @@
-# tests/ — 249 tests, torch-free
+# tests/ — 433 tests, torch-free
 
-Baseline: **249 pass, 1 skipped** (the skip needs an HF network download). Run
+Baseline: **433 pass** (one GSM8K test skips if the HF download is offline). Run
 the whole suite with `uv run pytest -q`.
 
 ## Torch-free discipline

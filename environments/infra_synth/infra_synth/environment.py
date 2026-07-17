@@ -97,7 +97,7 @@ def _resolve_verifier(
     return get_verifier(verifier_backend, base_url=sentinel_base_url)
 
 
-def _shape_reward(result: VerifyResult, **kw: float) -> float:
+def _shape_reward(result: VerifyResult, **kw: Any) -> float:
     """Call ``verifier.shape_reward`` if available, else the local mirror."""
     try:
         from verifier import shape_reward  # lazy
