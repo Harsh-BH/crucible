@@ -543,6 +543,7 @@ source = { editable = "." }
 dependencies = [
     { name = "crucible-verifier" },
     { name = "httpx" },
+    { name = "infra-synth" },
     { name = "pyyaml" },
     { name = "rich" },
 ]
@@ -566,6 +567,7 @@ requires-dist = [
     { name = "crucible-verifier", editable = "verifier" },
     { name = "datasets", marker = "extra == 'train'" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "infra-synth", editable = "environments/infra_synth" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },

@@ -6,7 +6,7 @@ with Verifiable Rewards) training.** Crucible trains language models to produce
 and smoke-testing the artifact inside a sandbox — and studies what happens when
 a policy learns to attack the verifier instead of solving the task.
 
-> **Status:** the foundation is built and tested end-to-end (**243 tests
+> **Status:** the foundation is built and tested end-to-end (**433 tests
 > passing**). The verifier layer, the `infra_synth` environment, the M1/M2
 > training scaffolding (prime-rl configs + a self-contained TRL trainer +
 > a ≥3-seed harness), the M2 proof (Sentinel↔local parity + a throughput
@@ -120,7 +120,7 @@ RLF-VRTP/
 ├── eval/                           # passk.py · benchmark.py · parity.py · throughput.py
 ├── analysis/                       # reward_hacking.py (C3 taxonomy) · curves.py (RLVR dashboard)
 ├── scripts/setup.sh                # bootstrap: install uv, uv sync, next steps
-└── tests/                          # 243 tests (verifier, env, training, eval, analysis)
+└── tests/                          # 433 tests (verifier, env, training, eval, analysis)
 ```
 
 `crucible-verifier` (import `verifier`) and `infra-synth` (import `infra_synth`)
@@ -138,7 +138,7 @@ Crucible uses [`uv`](https://docs.astral.sh/uv/). The core install is
 bash scripts/setup.sh          # installs uv if needed, syncs core + dev, prints next steps
 # --- or manually ---
 uv sync --extra dev            # core (crucible-verifier, httpx, pyyaml, rich) + dev tooling
-uv run pytest -q               # 243 passed, 1 skipped (the skip needs an HF network download)
+uv run pytest -q               # 433 passed (one GSM8K test skips if the HF download is offline)
 uv run ruff check .
 ```
 

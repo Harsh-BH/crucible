@@ -30,7 +30,7 @@ RLF-VRTP/
 ├── eval/                      passk.py · benchmark.py · parity.py · throughput.py
 ├── analysis/                  reward_hacking.py (C3 taxonomy) · curves.py (RLVR dashboard)
 ├── docs/                      DESIGN.md · ROADMAP.md
-└── tests/                     249 tests (verifier · env · training · eval · analysis)
+└── tests/                     433 tests (verifier · env · training · eval · analysis)
 ```
 
 Each package below has its own `CLAUDE.md` with package-specific detail; Claude
@@ -41,7 +41,7 @@ Code loads it on demand when you work in that subtree.
 | Task | Command |
 | --- | --- |
 | Sync deps (core + dev) | `uv sync --extra dev` |
-| Run all tests | `uv run pytest -q` (249 pass, 1 skipped — needs an HF download) |
+| Run all tests | `uv run pytest -q` (433 pass; one GSM8K test skips if the HF download is offline) |
 | Lint | `uv run ruff check .` |
 | Types | `uv run mypy verifier training eval` |
 | Train — TRL baseline | `python training/run.py --env gsm8k --model Qwen/Qwen3-1.7B --num-generations 8 --seed 0` |
