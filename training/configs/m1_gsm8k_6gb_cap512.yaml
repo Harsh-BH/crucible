@@ -1,0 +1,32 @@
+# Same as m1_gsm8k_6gb.yaml, testing whether the 256-token completion cap was
+# suppressing the reward signal rather than the method failing: 62.5% of
+# completions hit that cap on the final step of every 0.5B/cap=256 seed
+# (results/m1_gsm8k_6gb/README.md), and a truncated completion scores 0 on
+# both reward terms regardless of reasoning quality. Only max_completion_length
+# changes (256 -> 512); everything else is identical so the comparison is clean.
+#
+#   PYTHONPATH=. .venv-train/bin/python -m training.run \
+#     --config training/configs/m1_gsm8k_6gb_cap512.yaml --seed N \
+#     --output-dir results/m1_gsm8k_6gb_cap512/seedN
+env: gsm8k
+model: Qwen/Qwen2.5-0.5B-Instruct
+lora: true
+lora_rank: 8
+lora_alpha: 16
+num_generations: 4
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 2
+max_completion_length: 512          # doubled from m1_gsm8k_6gb.yaml's 256
+dataset_size: 128
+max_steps: 40
+lr: 1.0e-5
+beta: 0.0
+temperature: 1.0
+top_p: 1.0
+logging_steps: 1
+seed: 0
+output_dir: results/m1_gsm8k_6gb_cap512/seed0
+bf16: true
+gradient_checkpointing: true
+model_init_kwargs:
+  torch_dtype: bfloat16

@@ -1,0 +1,30 @@
+# m1_gsm8k_6gb_cap512.yaml (max_completion_length=512, everything else identical
+# to m1_gsm8k_6gb.yaml) OOMs during the backward pass at step 0 on this 6 GB
+# RTX 3050 (see results/m1_gsm8k_6gb_cap512/seed0/stdout.txt for the exact
+# torch.OutOfMemoryError). This variant halves the generation group (4 -> 2)
+# and the per-device batch (4 -> 2), doubling gradient_accumulation_steps
+# (2 -> 4) to hold the effective batch size constant, to find out whether
+# max_completion_length=512 is reachable on this GPU AT ALL, not just at the
+# original group/batch size.
+env: gsm8k
+model: Qwen/Qwen2.5-0.5B-Instruct
+lora: true
+lora_rank: 8
+lora_alpha: 16
+num_generations: 2                  # halved from m1_gsm8k_6gb.yaml's 4
+per_device_train_batch_size: 2       # halved; still 1 prompt per microstep (2/2)
+gradient_accumulation_steps: 4        # doubled to hold effective batch size constant
+max_completion_length: 512
+dataset_size: 128
+max_steps: 40
+lr: 1.0e-5
+beta: 0.0
+temperature: 1.0
+top_p: 1.0
+logging_steps: 1
+seed: 0
+output_dir: results/m1_gsm8k_6gb_cap512_g2/seed0
+bf16: true
+gradient_checkpointing: true
+model_init_kwargs:
+  torch_dtype: bfloat16
