@@ -1,0 +1,97 @@
+{
+  "n_groups": 8,
+  "group_size": 4,
+  "split": "train",
+  "frac_reward_zero_std": 0.0,
+  "overall_mean_reward": 0.40625,
+  "groups": [
+    {
+      "spec_id": "k8s-train-0-0005-python-flask-redis-8000",
+      "rewards": [
+        1.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "mean": 0.5,
+      "std": 0.5
+    },
+    {
+      "spec_id": "k8s-train-0-0006-python-fastapi-postgres-8000",
+      "rewards": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "mean": 0.25,
+      "std": 0.4330127018922193
+    },
+    {
+      "spec_id": "k8s-train-0-0008-python-flask-none-5000",
+      "rewards": [
+        0.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "mean": 0.5,
+      "std": 0.5
+    },
+    {
+      "spec_id": "k8s-train-0-0009-python-fastapi-postgres-8000",
+      "rewards": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mean": 0.25,
+      "std": 0.4330127018922193
+    },
+    {
+      "spec_id": "k8s-train-0-0010-python-fastapi-postgres-9000",
+      "rewards": [
+        0.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "mean": 0.5,
+      "std": 0.5
+    },
+    {
+      "spec_id": "k8s-train-0-0014-python-fastapi-postgres-5000",
+      "rewards": [
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "mean": 0.75,
+      "std": 0.4330127018922193
+    },
+    {
+      "spec_id": "k8s-train-0-0015-python-fastapi-redis-5000",
+      "rewards": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mean": 0.25,
+      "std": 0.4330127018922193
+    },
+    {
+      "spec_id": "k8s-train-0-0017-python-flask-redis-5000",
+      "rewards": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "mean": 0.25,
+      "std": 0.4330127018922193
+    }
+  ]
+}

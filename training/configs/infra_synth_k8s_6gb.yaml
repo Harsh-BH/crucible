@@ -1,0 +1,52 @@
+# The actual experiment infra_synth was built to answer: does GRPO reward rise
+# on the project's OWN task (verifiable infra-as-code), not the gsm8k
+# reproduction (results/m1_gsm8k_6gb/, which showed reward does NOT rise on a
+# task this project doesn't care about). Sized for a 6 GB laptop GPU (RTX
+# 3050), same scale as m1_gsm8k_6gb.yaml.
+#
+# kind=k8s (not dockerfile/compose/terraform) because it is the ONLY kind with
+# within-group reward variance at the base model -- see
+# results/infra_synth_eval/k8s_variance_check_t{1.0,0.7}.json:
+#   temperature=1.0 (the gsm8k default): frac_reward_zero_std=0.75 (6/8 groups
+#     all-zero) -- too little signal to train on.
+#   temperature=0.7: frac_reward_zero_std=0.0 (0/8), mean reward 0.406 -- real
+#     per-group variance. Hence temperature: 0.7 below (NOT the gsm8k config's
+#     1.0) -- a deliberate, measured choice, not a default carried over.
+# dockerfile/compose/terraform were 0% pass rate at temperature=1.0 greedy-ish
+# sampling in round 1 (results/infra_synth_eval/summary.json) -- all-zero
+# groups guaranteed, no gradient possible; not attempted here.
+#
+# verifier_backend: local == the kind-aware genuine dispatcher (real
+# `kubeconform -strict`, cache-fixed -- see the kubeconform-cache commit --
+# NOT the static/must_contain fallback used for ci-yaml in round 1).
+#
+# Run one seed:
+#   PYTHONPATH=. .venv-train/bin/python -m training.run \
+#     --config training/configs/infra_synth_k8s_6gb.yaml --seed 0 \
+#     --output-dir results/infra_synth_k8s_pilot/seed0
+env: infra_synth
+kind: k8s
+verifier_backend: local
+model: Qwen/Qwen2.5-0.5B-Instruct
+lora: true
+lora_rank: 8
+lora_alpha: 16
+num_generations: 4                  # small group => less KV-cache VRAM
+per_device_train_batch_size: 4      # must be divisible by num_generations (4/4 = 1 prompt/microstep)
+gradient_accumulation_steps: 2
+max_completion_length: 768          # k8s manifests (Deployment+Service, 2 docs) need more room than gsm8k's 256
+dataset_size: 128                   # auto-capped to the k8s train pool (~113 rows) by generate_tasks
+max_steps: 40                       # matches the m1_gsm8k_6gb precedent
+lr: 1.0e-5
+beta: 0.0
+temperature: 0.7                    # measured choice -- see header; NOT the gsm8k default (1.0)
+top_p: 1.0
+logging_steps: 1
+seed: 0
+output_dir: results/infra_synth_k8s_pilot/seed0
+# --- below are NOT RunConfig fields: they fall through to GRPOConfig via
+#     extra_grpo. These are the 6 GB memory levers (same as m1_gsm8k_6gb.yaml). ---
+bf16: true
+gradient_checkpointing: true
+model_init_kwargs:
+  torch_dtype: bfloat16
