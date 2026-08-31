@@ -34,7 +34,12 @@ lora_alpha: 16
 num_generations: 4                  # small group => less KV-cache VRAM
 per_device_train_batch_size: 4      # must be divisible by num_generations (4/4 = 1 prompt/microstep)
 gradient_accumulation_steps: 2
-max_completion_length: 768          # k8s manifests (Deployment+Service, 2 docs) need more room than gsm8k's 256
+max_completion_length: 384          # k8s manifests need more room than gsm8k's 256. 768 OOM'd at step 3,
+                                     # 512 (+ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True) OOM'd at
+                                     # step 6 -- variable completion length means peak memory isn't hit by
+                                     # every step, so a short smoke test can pass while a longer run still
+                                     # OOMs. 384 is the value that survived a 10-step burn-in (see pilot
+                                     # commit message).
 dataset_size: 128                   # auto-capped to the k8s train pool (~113 rows) by generate_tasks
 max_steps: 40                       # matches the m1_gsm8k_6gb precedent
 lr: 1.0e-5

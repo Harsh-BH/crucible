@@ -551,6 +551,14 @@ def train(cfg: RunConfig) -> dict[str, Any]:
     )
     trainer.train()
 
+    # Persist the final adapter/model unconditionally -- with the historical
+    # save_steps=0 default, GRPOConfig's save_strategy="no" means NO checkpoint
+    # is ever written, including at the end of training: a completed run left
+    # no way to reload the trained weights for a downstream eval (discovered
+    # running the infra_synth/k8s pilot -- see results/infra_synth_k8s_pilot/).
+    # This does not affect save_steps' INTERMEDIATE-checkpoint behavior.
+    trainer.save_model(cfg.output_dir)
+
     log_history = list(getattr(trainer.state, "log_history", []) or [])
     summary_path = write_summary(cfg, log_history)
     print(f"[training.run] wrote summary -> {summary_path}")
