@@ -1,5 +1,5 @@
 {
-  "build_pass_rate": 0.9333333333333333,
+  "build_pass_rate": 1.0,
   "config": {
     "hack_penalty": 0.0,
     "ks": [
@@ -28,13 +28,13 @@
     "spec_gaming": 0.0,
     "timed_out": 0.0
   },
-  "mean_reward": 0.9333333333333333,
-  "mean_wall_s": 0.1573545223339655,
+  "mean_reward": 1.0,
+  "mean_wall_s": 0.1842302749326336,
   "n_samples_total": 15,
   "n_tasks": 15,
-  "pass_at_1": 0.9333333333333333,
+  "pass_at_1": 1.0,
   "pass_at_k": {
-    "1": 0.9333333333333333
+    "1": 1.0
   },
   "per_task": [
     {
@@ -122,13 +122,13 @@
       "spec_id": "k8s-test-0-0020-python-flask-postgres-5000"
     },
     {
-      "build_hits": 0,
-      "c_smoke_ok": 0,
+      "build_hits": 1,
+      "c_smoke_ok": 1,
       "n": 1,
       "spec_id": "k8s-test-0-0021-python-flask-postgres-9000"
     }
   ],
-  "sample_build_rate": 0.9333333333333333,
-  "sample_smoke_rate": 0.9333333333333333,
-  "smoke_pass_rate": 0.9333333333333333
+  "sample_build_rate": 1.0,
+  "sample_smoke_rate": 1.0,
+  "smoke_pass_rate": 1.0
 }

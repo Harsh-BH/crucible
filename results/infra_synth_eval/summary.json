@@ -18,10 +18,10 @@
     "smoke_pass_rate": 0.0
   },
   "k8s": {
-    "build_pass_rate": 0.5333333333333333,
-    "mean_wall_s": 48.310887731000015,
+    "build_pass_rate": 0.9333333333333333,
+    "mean_wall_s": 0.1573545223339655,
     "n_tasks": 15,
-    "smoke_pass_rate": 0.5333333333333333
+    "smoke_pass_rate": 0.9333333333333333
   },
   "terraform": {
     "build_pass_rate": 0.0,

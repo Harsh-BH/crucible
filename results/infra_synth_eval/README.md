@@ -1,5 +1,21 @@
 # infra_synth pass rate: Qwen2.5-0.5B-Instruct, REAL local verifier
 
+> **CORRECTION (2026-09-01, round 2):** the k8s number below (53.3%, 8/15) does
+> **NOT** reproduce. `LocalK8sVerifier` had no `-cache` for kubeconform's schema
+> fetch (see the kubeconform-cache-fix commit), so it was re-fetching schemas
+> over HTTP on every call; that same network flakiness that produced the 48s
+> mean / 120s timeout was ALSO scoring some genuinely-valid manifests as
+> `smoke_ok=False` on transient fetch failures — a correctness bug, not just a
+> speed bug. Re-running the *exact same, unmodified* script
+> (`scripts/infra_synth_pass_rate.py --kinds k8s --n 15`) after the cache fix,
+> against the same 15 test-split tasks, gives **14/15 (93.3%)**, not 8/15.
+> `k8s.json`/`summary.json` in this directory now hold the corrected (93.3%)
+> numbers; the prose below (53.3%, "the standout kind" framing) is the
+> **original, retracted** round-1 text, left in place for the record rather
+> than silently rewritten. See `results/infra_synth_k8s_pilot/` for what
+> happened next (GRPO training + a real before/after on the corrected
+> baseline).
+
 This measures the project's actual thesis metric — not the M1 gsm8k reproduction
 (`results/m1_gsm8k_6gb/`, which showed reward does not rise on a task infra_synth
 doesn't care about). README.md's pitch is a policy that produces *verifiable*
