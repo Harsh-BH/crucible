@@ -85,7 +85,12 @@ def main() -> None:
         do_sample=args.do_sample, temperature=args.temperature,
     )
 
-    ks = (1, args.samples_per_task) if args.samples_per_task > 1 else (1,)
+    # Full power-of-2 curve up to samples_per_task (always include the top n
+    # itself even if not a power of 2), per eval.passk's unbiased estimator --
+    # assumes i.i.d. samples at a fixed temperature, which holds here (each of
+    # the n generate() calls per prompt is an independent do_sample draw at a
+    # constant temperature, no shared state between them).
+    ks = tuple(sorted({k for k in (1, 2, 4, 8, 16) if k <= args.samples_per_task} | {args.samples_per_task}))
     report = evaluate(
         tasks, gen_fn, verifier_backend="local", n=args.samples_per_task, ks=ks, seed=0, out_path=args.out
     )

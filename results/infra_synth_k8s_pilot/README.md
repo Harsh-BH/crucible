@@ -148,49 +148,40 @@ held-out pass rates below.
 
 **Held-out pass rate, same 15 test tasks/harness as round 1**
 (`scripts/infra_synth_k8s_posttrain_eval.py`; `posttrain_eval.json` = greedy
-n=1, `sampled_eval.json` = t=0.7 n=4/task):
+n=1).
 
-| | greedy (n=1) | sampled t=0.7, pass@1 (mean/sample) | sampled t=0.7, pass@4 (any-of-4) |
-|---|---|---|---|
-| **baseline** (base model) | 14/15 = 93.3% | 43.3% | 100% |
-| seed 0 | 15/15 = 100% | 38.3% | 80.0% |
-| seed 1 | 15/15 = 100% | 60.0% | 100% |
-| seed 2 | 15/15 = 100% | 50.0% | 93.3% |
-| **mean ± std (3 seeds)** | **100% ± 0** | **49.4% ± 8.9pp** (Δ **+6.1pp**) | **91.1% ± 8.3pp** (Δ **−8.9pp**) |
+*Superseded first pass, n=4/task* (`sampled_eval.json`): baseline pass@1 43.3%,
+"any-of-4" 100%; seed0 38.3%/80.0%, seed1 60.0%/100%, seed2 50.0%/93.3%. At
+n=k=4 "any-of-4" is just the empirical outcome of the 4 draws actually taken —
+noisy, not the unbiased estimator — and it read as pass@4 *regressing* for 2 of
+3 seeds. That reading did not survive higher resolution; see below.
 
-**Report this exactly as loudly as a positive, per instructions — it is not a
-clean win:**
-- **Greedy**: all 3 seeds reach 100% (from 93.3%) — small, consistent, but
-  it's a 1-of-15 ceiling flip per seed (see caveat above), not a strong signal
-  by itself.
-- **Sampled pass@1 (mean-per-sample, the closest held-out analogue of the
-  TRAIN reward the trainer optimizes)**: improved for 2 of 3 seeds (seed1
-  +16.7pp, seed2 +6.7pp) and **regressed** for 1 of 3 (seed0 −5.0pp). Mean
-  +6.1pp — real but small relative to the ±8.9pp spread across just 3 seeds.
-- **Sampled pass@4 (any-of-4, the metric closest to what the base-model
-  headroom table above measured)**: **got WORSE for 2 of 3 seeds** (seed0
-  80.0%, seed2 93.3%, both below baseline's 100%; only seed1 held at 100%).
-  Mean −8.9pp.
-- **Reading pass@1 up + pass@4 down together**: this is consistent with GRPO
-  narrowing the sampling distribution around its (now higher-reward-on-average)
-  mode — the policy gets *more consistent* per prompt, which raises the typical
-  single-sample success rate but removes some of the base model's "lucky diverse
-  attempt" escape hatches that let a mediocre-on-average prompt still succeed at
-  least once in 4 tries. That is a real and interesting mechanistic hypothesis,
-  not a confirmed one — 3 seeds x 15 tasks x 4 samples is not enough data to
-  separate it cleanly from noise (the pass@1 std across seeds, 8.9pp, is
-  comparable in size to the mean delta, 6.1pp).
-- **Bottom line**: the trainer's own reward rose consistently and substantially
-  (+0.233 ± 0.077, all 3 seeds positive) and greedy pass rate rose to ceiling
-  for all 3 seeds. The held-out SAMPLED pass rate — the axis with real headroom
-  and the axis closest to what GRPO actually optimizes — shows a small mean
-  improvement on pass@1 but a mean regression on pass@4, with high seed-to-seed
-  variance on both. This does **not** cleanly demonstrate "training generalizes
-  to held-out sampling," but it does not show pure reward-hacking either
-  (pass@1 improved on average, not just the trainer's own metric). The honest
-  characterization is: **real, reproduced training signal; inconclusive,
-  seed-variable effect on held-out generalization, tilted slightly positive
-  on the primary (pass@1) axis and negative on the secondary (pass@4) axis.**
+**Corrected: n=8/task, `eval/passk.py`'s unbiased combinatorial pass@k
+estimator** (`sampled_eval_n8.json` / `baseline_sampled_eval_n8.json`;
+i.i.d. samples at fixed temperature=0.7 — the estimator's assumption holds
+here, each `generate()` call is an independent draw with no shared state):
+
+| k | baseline | seed0 | seed1 | seed2 | mean ± std (3 seeds) | Δ vs baseline |
+|---|---|---|---|---|---|---|
+| 1 | 0.433 | 0.392 | 0.608 | 0.533 | 0.511 ± 0.090 | **+0.078** |
+| 2 | 0.671 | 0.629 | 0.855 | 0.776 | 0.753 ± 0.094 | **+0.082** |
+| 4 | 0.883 | 0.869 | 0.987 | 0.941 | 0.932 ± 0.049 | **+0.049** |
+| 8 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 ± 0.000 | 0.000 (ceiling) |
+
+Greedy: baseline 93.3% (14/15); all 3 seeds 100% (15/15) — one task flipped per
+seed (see above), report as that, not as "100% pass rate."
+
+**Retracting the n=4 "pass@4 regressed" reading.** At proper resolution the
+curve shape is: **2 of 3 seeds (seed1, seed2) sit ABOVE baseline at every k**
+(the "starts higher, flattens earlier" signature of a genuinely improved
+policy, not a narrowed-but-net-worse one), and **seed0 sits AT OR SLIGHTLY
+BELOW baseline at every k** (a small, roughly uniform decline, not a
+lucky-escape-hatches-removed pattern). The corpus-mean curve is above baseline
+at k=1,2,4 and ties it at k=8 (both already at ceiling). This is a real,
+if seed-variable, effect — not the "GRPO traded diversity for consistency and
+net-lost" story the noisier n=4 read suggested. The 3-seed spread (std 4.9-9.4pp
+across k=1..4) is still large relative to the mean delta (4.9-8.2pp), which is
+exactly why seeds 3-4 were run next (below) rather than stopping here.
 
 ## The `save_model` bug is a bigger finding than the pilot itself
 
