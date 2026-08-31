@@ -1,0 +1,45 @@
+# Loop-sanity (TOY) GRPO run on the REAL M1 task (gsm8k), sized for a 6 GB
+# laptop GPU (RTX 3050). This is the config that was previously MISSING: the
+# only committed 6 GB config (m1_reverse_6gb.yaml) runs `reverse_text`, not
+# gsm8k, and at max_steps=30, not 40 -- yet docs/ROADMAP.md's "Partially
+# exercised" note and commit 8826ed3 both describe a "gsm8k (40 steps,
+# group=4, single seed)" run. No config for that run was ever committed. This
+# file is that config, so the claim can be re-measured against a real
+# artifact instead of prose alone.
+#
+# NOT the full M1 (needs Qwen3-1.7B + >=24 GB, >=3 seeds at the real scale).
+# This is the loop-sanity scale (Qwen2.5-0.5B, single small GPU) run for
+# >=3 seeds per training/README.md's M1 definition-of-done, to see whether
+# reward rises stably even at this toy scale.
+#
+# Run one seed:
+#   PYTHONPATH=. .venv-train/bin/python -m training.run \
+#     --config training/configs/m1_gsm8k_6gb.yaml --seed 0 \
+#     --output-dir results/m1_gsm8k_6gb/seed0
+#
+# Run the >=3-seed sweep via training.seeds.launch_seeds — see
+# results/m1_gsm8k_6gb/README.md for the exact invocation and results.
+env: gsm8k
+model: Qwen/Qwen2.5-0.5B-Instruct   # smallest practical instruct LM that fits 6 GB
+lora: true
+lora_rank: 8
+lora_alpha: 16
+num_generations: 4                  # small group => less KV-cache VRAM
+per_device_train_batch_size: 4      # must be divisible by num_generations (4/4 = 1 prompt/microstep)
+gradient_accumulation_steps: 2
+max_completion_length: 256          # gsm8k needs real reasoning + a \boxed{} answer, unlike reverse_text's 64
+dataset_size: 128
+max_steps: 40                       # matches the disputed ROADMAP.md claim, so this run tests it directly
+lr: 1.0e-5
+beta: 0.0
+temperature: 1.0
+top_p: 1.0
+logging_steps: 1
+seed: 0
+output_dir: results/m1_gsm8k_6gb/seed0
+# --- below are NOT RunConfig fields: they fall through to GRPOConfig via
+#     extra_grpo. These are the 6 GB memory levers (same as m1_reverse_6gb.yaml). ---
+bf16: true                          # mixed-precision training
+gradient_checkpointing: true        # trade compute for activation memory
+model_init_kwargs:
+  torch_dtype: bfloat16             # load the base model in bf16 (halves weight VRAM)
