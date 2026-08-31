@@ -822,20 +822,36 @@ class LocalK8sVerifier:
     ``VerifyResult(build_ok=False, status='kubeconform-unavailable')`` (it never
     raises). All blocking work runs via :func:`asyncio.to_thread`.
 
+    Performance: with no ``-cache``, every call re-fetches the k8s JSON schemas
+    over HTTP (default ``-kubernetes-version master``, a moving target). Under
+    back-to-back calls (an eval sweep, a training loop) that HTTP round-trip is
+    a genuine bottleneck -- measured 48s mean / a 120s timeout per call in
+    ``results/infra_synth_eval/`` vs. 0.65s / 0.12s once the schema is cached on
+    disk. ``cache_dir`` (default ``~/.cache/crucible/kubeconform``, created
+    lazily) is passed straight through to ``-cache`` so schemas persist across
+    calls and process restarts; pass ``cache_dir=None`` to opt back out (the
+    historical no-cache behavior, e.g. for a hermetic test).
+
     The validation step is a single overridable hook (:meth:`_kubeconform`) so
     result mapping can be unit-tested without a real CLI.
     """
 
     name = "local-k8s"
 
+    DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/crucible/kubeconform")
+
     def __init__(
         self,
         *,
         kubeconform_exe: str = "kubeconform",
         strict: bool = True,
+        cache_dir: str | None = DEFAULT_CACHE_DIR,
     ) -> None:
         self.kubeconform_exe = kubeconform_exe
         self.strict = strict
+        self.cache_dir = cache_dir
+        if self.cache_dir:
+            os.makedirs(self.cache_dir, exist_ok=True)
 
     def _kubeconform_available(self) -> bool:
         return shutil.which(self.kubeconform_exe) is not None
@@ -853,6 +869,8 @@ class LocalK8sVerifier:
     # -- overridable hook (for testing) ------------------------------------
     def _kubeconform(self, path: str, timeout_s: float) -> subprocess.CompletedProcess:
         cmd = [self.kubeconform_exe]
+        if self.cache_dir:
+            cmd += ["-cache", self.cache_dir]
         if self.strict:
             cmd.append("-strict")
         cmd += ["-summary", path]

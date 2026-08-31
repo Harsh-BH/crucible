@@ -2,6 +2,7 @@
 LocalDockerVerifier mapping) and the get_verifier factory."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -743,6 +744,40 @@ async def test_local_k8s_non_strict_omits_flag(monkeypatch) -> None:
     res = await v.verify(GOOD_K8S, _k8s_spec())
     assert res.status == "validated"
     assert "-strict" not in seen["cmd"]
+
+
+def test_local_k8s_default_cache_dir_passes_cache_flag(monkeypatch, tmp_path) -> None:
+    # Perf fix: repeated calls with no -cache re-fetch schemas over HTTP (measured
+    # 48s mean / a 120s timeout in results/infra_synth_eval/); -cache makes that a
+    # one-time cost. Default is on; a custom dir is honored and created lazily.
+    cache_dir = str(tmp_path / "kc-cache")
+    v = LocalK8sVerifier(cache_dir=cache_dir)
+    assert os.path.isdir(cache_dir)  # created eagerly in __init__
+
+    seen = {}
+
+    def fake_run(cmd, *a, **k):
+        seen["cmd"] = cmd
+        return _ok_proc("Valid")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    v._kubeconform("manifests.yaml", 10.0)
+    assert "-cache" in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("-cache") + 1] == cache_dir
+
+
+def test_local_k8s_cache_dir_none_omits_flag(monkeypatch) -> None:
+    v = LocalK8sVerifier(cache_dir=None)
+
+    seen = {}
+
+    def fake_run(cmd, *a, **k):
+        seen["cmd"] = cmd
+        return _ok_proc("Valid")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    v._kubeconform("manifests.yaml", 10.0)
+    assert "-cache" not in seen["cmd"]
 
 
 # --- LocalGenuineVerifier: kind-aware dispatch -----------------------------
