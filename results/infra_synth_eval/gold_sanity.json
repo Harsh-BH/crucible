@@ -1,0 +1,47 @@
+[
+  {
+    "kind": "dockerfile",
+    "spec_id": "test-0-0001-python-flask-postgres-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "status": "smoke-ok",
+    "wall_s": 24.35,
+    "stderr_tail": "user:appuser /app\n#11 DONE 0.2s\n\n#12 exporting to image\n#12 exporting layers\n#12 exporting layers 0.6s done\n#12 writing image sha256:03a9fc53a55a750ce6a5ceee4bd2ad6e3364b20eb7e2a9d9b237a6e6d5b55835 done\n#12 naming to docker.io/library/crucible-verify:121858-664725 done\n#12 DONE 0.6s\n\nprobe: HTTP 200"
+  },
+  {
+    "kind": "compose",
+    "spec_id": "compose-test-0-0001-python-flask-postgres-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "status": "smoke-ok",
+    "wall_s": 1.78,
+    "stderr_tail": "ucible-compose-121858-689079-web-1 Created \n Container crucible-compose-121858-689079-postgres-1 Starting \n Container crucible-compose-121858-689079-postgres-1 Started \n Container crucible-compose-121858-689079-web-1 Starting \n Container crucible-compose-121858-689079-web-1 Started \n\nprobe: HTTP 200"
+  },
+  {
+    "kind": "terraform",
+    "spec_id": "tf-test-0-0001-python-flask-postgres-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "status": "validated",
+    "wall_s": 6.97,
+    "stderr_tail": ""
+  },
+  {
+    "kind": "k8s",
+    "spec_id": "k8s-test-0-0001-python-flask-postgres-9000",
+    "build_ok": false,
+    "smoke_ok": false,
+    "status": "k8s-timeout",
+    "wall_s": 120.02,
+    "stderr_tail": ""
+  },
+  {
+    "kind": "ci-yaml",
+    "spec_id": "ci-test-0-0000-python-flask-none-8080",
+    "build_ok": true,
+    "smoke_ok": true,
+    "status": "ok",
+    "wall_s": 0.0,
+    "stderr_tail": ""
+  }
+]

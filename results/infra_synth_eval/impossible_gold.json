@@ -1,0 +1,137 @@
+[
+  {
+    "kind": "dockerfile",
+    "mutation": "contradictory_base",
+    "spec_id": "test-0-0001-python-flask-postgres-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "smoke-ok"
+  },
+  {
+    "kind": "dockerfile",
+    "mutation": "impossible_token",
+    "spec_id": "test-0-0002-python-fastapi-none-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "smoke-ok"
+  },
+  {
+    "kind": "dockerfile",
+    "mutation": "contradictory_port",
+    "spec_id": "test-0-0003-python-fastapi-postgres-8000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "smoke-ok"
+  },
+  {
+    "kind": "compose",
+    "mutation": "impossible_token",
+    "spec_id": "compose-test-0-0001-python-flask-postgres-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "smoke-ok"
+  },
+  {
+    "kind": "compose",
+    "mutation": "impossible_token",
+    "spec_id": "compose-test-0-0002-python-fastapi-none-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "smoke-ok"
+  },
+  {
+    "kind": "compose",
+    "mutation": "impossible_token",
+    "spec_id": "compose-test-0-0003-python-fastapi-postgres-8000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "smoke-ok"
+  },
+  {
+    "kind": "terraform",
+    "mutation": "impossible_token",
+    "spec_id": "tf-test-0-0001-python-flask-postgres-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "validated"
+  },
+  {
+    "kind": "terraform",
+    "mutation": "impossible_token",
+    "spec_id": "tf-test-0-0002-python-fastapi-none-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "validated"
+  },
+  {
+    "kind": "terraform",
+    "mutation": "impossible_token",
+    "spec_id": "tf-test-0-0003-python-fastapi-postgres-8000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "validated"
+  },
+  {
+    "kind": "k8s",
+    "mutation": "impossible_token",
+    "spec_id": "k8s-test-0-0001-python-flask-postgres-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "validated"
+  },
+  {
+    "kind": "k8s",
+    "mutation": "impossible_token",
+    "spec_id": "k8s-test-0-0002-python-fastapi-none-9000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "validated"
+  },
+  {
+    "kind": "k8s",
+    "mutation": "impossible_token",
+    "spec_id": "k8s-test-0-0003-python-fastapi-postgres-8000",
+    "build_ok": true,
+    "smoke_ok": true,
+    "undeserved_pass": true,
+    "status": "validated"
+  },
+  {
+    "kind": "ci-yaml",
+    "mutation": "impossible_token",
+    "spec_id": "ci-test-0-0000-python-flask-none-8080",
+    "build_ok": false,
+    "smoke_ok": false,
+    "undeserved_pass": false,
+    "status": "ok"
+  },
+  {
+    "kind": "ci-yaml",
+    "mutation": "impossible_token",
+    "spec_id": "ci-test-0-0001-python-flask-postgres-9000",
+    "build_ok": false,
+    "smoke_ok": false,
+    "undeserved_pass": false,
+    "status": "ok"
+  },
+  {
+    "kind": "ci-yaml",
+    "mutation": "impossible_token",
+    "spec_id": "ci-test-0-0002-python-fastapi-none-9000",
+    "build_ok": false,
+    "smoke_ok": false,
+    "undeserved_pass": false,
+    "status": "ok"
+  }
+]

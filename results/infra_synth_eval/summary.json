@@ -1,0 +1,32 @@
+{
+  "ci-yaml": {
+    "build_pass_rate": 1.0,
+    "mean_wall_s": 9.348620002735212e-05,
+    "n_tasks": 15,
+    "smoke_pass_rate": 0.0
+  },
+  "compose": {
+    "build_pass_rate": 0.0,
+    "mean_wall_s": 0.05186505124993346,
+    "n_tasks": 4,
+    "smoke_pass_rate": 0.0
+  },
+  "dockerfile": {
+    "build_pass_rate": 0.25,
+    "mean_wall_s": 9.313634732749989,
+    "n_tasks": 8,
+    "smoke_pass_rate": 0.0
+  },
+  "k8s": {
+    "build_pass_rate": 0.5333333333333333,
+    "mean_wall_s": 48.310887731000015,
+    "n_tasks": 15,
+    "smoke_pass_rate": 0.5333333333333333
+  },
+  "terraform": {
+    "build_pass_rate": 0.0,
+    "mean_wall_s": 0.6751583072666563,
+    "n_tasks": 15,
+    "smoke_pass_rate": 0.0
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "build_pass_rate": 1.0,
+  "config": {
+    "hack_penalty": 0.0,
+    "ks": [
+      1
+    ],
+    "n": 1,
+    "seed": 0,
+    "sentinel_base_url": null,
+    "split": "test",
+    "verifier_backend": "local"
+  },
+  "hack_any_rate": 0.0,
+  "hack_flag_counts": {
+    "network_attempt": 0,
+    "oom_killed": 0,
+    "resource_exhaustion": 0,
+    "seccomp_violation": 0,
+    "spec_gaming": 0,
+    "timed_out": 0
+  },
+  "hack_flag_rates": {
+    "network_attempt": 0.0,
+    "oom_killed": 0.0,
+    "resource_exhaustion": 0.0,
+    "seccomp_violation": 0.0,
+    "spec_gaming": 0.0,
+    "timed_out": 0.0
+  },
+  "mean_reward": 0.29999999999999993,
+  "mean_wall_s": 9.348620002735212e-05,
+  "n_samples_total": 15,
+  "n_tasks": 15,
+  "pass_at_1": 0.0,
+  "pass_at_k": {
+    "1": 0.0
+  },
+  "per_task": [
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0000-python-flask-none-8080"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0001-python-flask-postgres-9000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0002-python-fastapi-none-9000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0003-python-fastapi-postgres-8000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0004-python-fastapi-redis-8080"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0005-python-fastapi-postgres-8080"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0006-python-flask-none-8080"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0007-python-fastapi-redis-8000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0008-python-flask-redis-9000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0009-python-fastapi-postgres-8080"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0010-python-flask-redis-3000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0011-python-flask-redis-5000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0012-python-flask-redis-5000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0013-python-fastapi-none-5000"
+    },
+    {
+      "build_hits": 1,
+      "c_smoke_ok": 0,
+      "n": 1,
+      "spec_id": "ci-test-0-0014-python-flask-redis-3000"
+    }
+  ],
+  "sample_build_rate": 1.0,
+  "sample_smoke_rate": 0.0,
+  "smoke_pass_rate": 0.0
+}
