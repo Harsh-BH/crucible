@@ -86,6 +86,7 @@ class RunConfig:
     # data
     dataset_split: str = "train"
     dataset_size: int | None = None
+    kind: str = "dockerfile"  # infra_synth artifact kind (dockerfile/compose/ci-yaml/terraform/k8s)
     # reward (infra_synth / M2)
     verifier_backend: str = "static"
     sentinel_base_url: str | None = None
@@ -165,11 +166,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # data
     p.add_argument("--dataset-split", default=None)
     p.add_argument("--dataset-size", type=int, default=None)
+    p.add_argument(
+        "--kind", choices=["dockerfile", "compose", "ci-yaml", "terraform", "k8s"],
+        default=None, help="infra_synth artifact kind (default dockerfile).",
+    )
     # reward / M2
     p.add_argument(
         "--verifier-backend",
-        choices=["static", "local-py", "local-docker", "sentinel"], default=None,
-        help="infra_synth reward backend ('sentinel' = M2).",
+        choices=["static", "local-py", "local-docker", "local-k8s", "local", "sentinel"],
+        default=None,
+        help="infra_synth reward backend ('local' = kind-aware genuine dispatcher; 'sentinel' = M2).",
     )
     p.add_argument("--sentinel-base-url", default=None)
     p.add_argument("--build-weight", type=float, default=None)
@@ -197,7 +203,7 @@ _FIELD_NAMES = {
     "importance_sampling_level", "scale_rewards", "temperature", "top_p",
     "max_steps", "max_completion_length", "num_iterations", "lr",
     "per_device_train_batch_size", "gradient_accumulation_steps",
-    "dataset_split", "dataset_size", "verifier_backend", "sentinel_base_url",
+    "dataset_split", "dataset_size", "kind", "verifier_backend", "sentinel_base_url",
     "build_weight", "smoke_weight", "hack_penalty", "use_format_reward",
     "seed", "wandb_project", "wandb_name", "output_dir", "logging_steps",
     "save_steps", "smoke",
@@ -254,6 +260,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "per_device_train_batch_size": args.per_device_train_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "dataset_split": args.dataset_split, "dataset_size": args.dataset_size,
+        "kind": args.kind,
         "verifier_backend": args.verifier_backend,
         "sentinel_base_url": args.sentinel_base_url,
         "build_weight": args.build_weight, "smoke_weight": args.smoke_weight,
@@ -311,7 +318,7 @@ def build_dataset(cfg: RunConfig) -> Any:
         )
     if cfg.env == "infra_synth":
         return data_mod.build_infra_synth(
-            split=cfg.dataset_split, n=cfg.dataset_size, seed=cfg.seed
+            split=cfg.dataset_split, n=cfg.dataset_size, seed=cfg.seed, kind=cfg.kind
         )
     if cfg.env == "reverse_text":
         return _build_reverse_text(cfg)

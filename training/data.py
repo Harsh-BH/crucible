@@ -238,14 +238,22 @@ def build_infra_synth(
     n: int | None = None,
     seed: int = 0,
     *,
+    kind: str = "dockerfile",
     chat: bool = True,
 ) -> Dataset:
     """Build an ``infra_synth`` dataset from :func:`infra_synth.tasks.generate_tasks`.
 
-    Columns: ``prompt`` (chat or string, prefixed with the env
-    :data:`infra_synth.tasks.SYSTEM_PROMPT`), ``question`` (the NL spec),
-    ``answer`` (the gold base-image hint), ``info`` (the pipeline source of truth
-    used by :func:`infra_synth.tasks.build_verify_spec`) and ``task``.
+    ``kind`` selects the artifact family (``"dockerfile"`` (default) |
+    ``"compose"`` | ``"ci-yaml"`` | ``"terraform"`` | ``"k8s"``); the matching
+    per-kind system prompt (e.g. :data:`infra_synth.tasks.K8S_SYSTEM_PROMPT`) is
+    used and forwarded to :func:`infra_synth.tasks.generate_tasks` so the ``info``
+    dicts (and their ``kind`` field, which :func:`infra_synth.tasks.build_verify_spec`
+    reads) match.
+
+    Columns: ``prompt`` (chat or string, prefixed with the kind's system prompt),
+    ``question`` (the NL spec), ``answer`` (the gold base-image hint), ``info``
+    (the pipeline source of truth used by :func:`infra_synth.tasks.build_verify_spec`)
+    and ``task``.
 
     The ``infra_synth`` env package + ``datasets`` are imported lazily so this
     module imports torch/datasets-free.
@@ -254,8 +262,15 @@ def build_infra_synth(
 
     infra_tasks = _import_infra_tasks()  # lazy (installed env package)
 
-    raw = infra_tasks.generate_tasks(n=n, seed=seed, split=split)
-    system = infra_tasks.SYSTEM_PROMPT
+    raw = infra_tasks.generate_tasks(n=n, seed=seed, split=split, kind=kind)
+    system_by_kind = {
+        "dockerfile": infra_tasks.SYSTEM_PROMPT,
+        "compose": infra_tasks.COMPOSE_SYSTEM_PROMPT,
+        "ci-yaml": infra_tasks.CI_YAML_SYSTEM_PROMPT,
+        "terraform": infra_tasks.TERRAFORM_SYSTEM_PROMPT,
+        "k8s": infra_tasks.K8S_SYSTEM_PROMPT,
+    }
+    system = system_by_kind[kind]
 
     rows: dict[str, list[Any]] = {
         "prompt": [],

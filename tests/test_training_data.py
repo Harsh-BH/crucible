@@ -135,3 +135,16 @@ def test_build_infra_synth_shape() -> None:
     # `info` must carry the spec_id used to build a VerifySpec downstream.
     assert "spec_id" in row["info"]
     assert isinstance(row["prompt"], list)
+
+
+def test_build_infra_synth_kind_selects_matching_prompt_and_info() -> None:
+    # kind= must thread through to both generate_tasks (info["kind"], which
+    # build_verify_spec reads) and the system prompt (each kind has its own).
+    pytest.importorskip("datasets")
+    pytest.importorskip("infra_synth")
+    from infra_synth import tasks as infra_tasks
+
+    ds = build_infra_synth(split="train", n=3, seed=0, kind="k8s")
+    row = ds[0]
+    assert row["info"]["kind"] == "k8s"
+    assert row["prompt"][0]["content"] == infra_tasks.K8S_SYSTEM_PROMPT
