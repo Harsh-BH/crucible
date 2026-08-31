@@ -1,11 +1,12 @@
 {
-  "build_pass_rate": 1.0,
+  "build_pass_rate": 0.9333333333333333,
   "config": {
     "hack_penalty": 0.0,
     "ks": [
-      1
+      1,
+      4
     ],
-    "n": 1,
+    "n": 4,
     "seed": 0,
     "sentinel_base_url": null,
     "split": "test",
@@ -28,107 +29,108 @@
     "spec_gaming": 0.0,
     "timed_out": 0.0
   },
-  "mean_reward": 1.0,
-  "mean_wall_s": 0.12821773679946394,
-  "n_samples_total": 15,
+  "mean_reward": 0.5,
+  "mean_wall_s": 0.19434960386630942,
+  "n_samples_total": 60,
   "n_tasks": 15,
-  "pass_at_1": 1.0,
+  "pass_at_1": 0.5,
   "pass_at_k": {
-    "1": 1.0
+    "1": 0.5,
+    "4": 0.9333333333333333
   },
   "per_task": [
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 3,
+      "c_smoke_ok": 3,
+      "n": 4,
       "spec_id": "k8s-test-0-0001-python-flask-postgres-9000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 3,
+      "c_smoke_ok": 3,
+      "n": 4,
       "spec_id": "k8s-test-0-0002-python-fastapi-none-9000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 2,
+      "c_smoke_ok": 2,
+      "n": 4,
       "spec_id": "k8s-test-0-0003-python-fastapi-postgres-8000"
     },
     {
       "build_hits": 1,
       "c_smoke_ok": 1,
-      "n": 1,
+      "n": 4,
       "spec_id": "k8s-test-0-0007-python-fastapi-redis-8000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 3,
+      "c_smoke_ok": 3,
+      "n": 4,
       "spec_id": "k8s-test-0-0008-python-flask-redis-9000"
     },
     {
       "build_hits": 1,
       "c_smoke_ok": 1,
-      "n": 1,
+      "n": 4,
       "spec_id": "k8s-test-0-0011-python-flask-redis-5000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 3,
+      "c_smoke_ok": 3,
+      "n": 4,
       "spec_id": "k8s-test-0-0012-python-flask-redis-5000"
     },
     {
       "build_hits": 1,
       "c_smoke_ok": 1,
-      "n": 1,
+      "n": 4,
       "spec_id": "k8s-test-0-0013-python-fastapi-none-5000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 3,
+      "c_smoke_ok": 3,
+      "n": 4,
       "spec_id": "k8s-test-0-0015-python-fastapi-none-9000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 3,
+      "c_smoke_ok": 3,
+      "n": 4,
       "spec_id": "k8s-test-0-0016-python-fastapi-none-5000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 0,
+      "c_smoke_ok": 0,
+      "n": 4,
       "spec_id": "k8s-test-0-0017-python-fastapi-redis-8000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 2,
+      "c_smoke_ok": 2,
+      "n": 4,
       "spec_id": "k8s-test-0-0018-python-fastapi-none-5000"
     },
     {
       "build_hits": 1,
       "c_smoke_ok": 1,
-      "n": 1,
+      "n": 4,
       "spec_id": "k8s-test-0-0019-python-fastapi-postgres-8000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 2,
+      "c_smoke_ok": 2,
+      "n": 4,
       "spec_id": "k8s-test-0-0020-python-flask-postgres-5000"
     },
     {
-      "build_hits": 1,
-      "c_smoke_ok": 1,
-      "n": 1,
+      "build_hits": 2,
+      "c_smoke_ok": 2,
+      "n": 4,
       "spec_id": "k8s-test-0-0021-python-flask-postgres-9000"
     }
   ],
-  "sample_build_rate": 1.0,
-  "sample_smoke_rate": 1.0,
-  "smoke_pass_rate": 1.0
+  "sample_build_rate": 0.5,
+  "sample_smoke_rate": 0.5,
+  "smoke_pass_rate": 0.9333333333333333
 }

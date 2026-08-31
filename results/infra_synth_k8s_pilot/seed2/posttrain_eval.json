@@ -29,7 +29,7 @@
     "timed_out": 0.0
   },
   "mean_reward": 1.0,
-  "mean_wall_s": 0.12821773679946394,
+  "mean_wall_s": 0.12648143586702645,
   "n_samples_total": 15,
   "n_tasks": 15,
   "pass_at_1": 1.0,

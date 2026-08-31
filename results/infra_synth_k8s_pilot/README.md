@@ -96,8 +96,115 @@ structurally the same Deployment+Service pair; diff was inspected by hand).
 there is exactly one task per seed that CAN flip, and greedy decoding is
 deterministic (no sampling noise to average out) — so "14/15 -> 15/15" is real
 and reproducible for this seed/config, but it is not strong evidence on its
-own that training reliably fixes this class of error; that needs the
-multi-seed run this pilot was gating.
+own that training reliably fixes this class of error. The eval-axis change and
+3-seed run below settle it.
+
+## Eval-axis correction: greedy has no headroom, sampling does
+
+Base-model comparison, same 15 test tasks, `results/infra_synth_eval/k8s_variance_check_t0.7.json`
+(TRAIN split) vs a fresh TEST-split sampled measurement:
+
+| axis | rate |
+|---|---|
+| greedy, test split | 14/15 = 93.3% |
+| sampled t=0.7, TRAIN split (variance check) | mean reward 0.406 |
+| sampled t=0.7, **TEST split** (`baseline_sampled_eval.json`, n=4/task) | pass@1 (mean) 43.3%, pass@4 (any-of-4) 100% |
+
+The model writes valid k8s manifests 93% of the time greedily but only ~43% of
+the time per-sample when sampled at t=0.7 (t=1.0 is worse still — variance
+check mean reward 0.06). **The base model is not weak at this task, it is
+fragile under sampling** — and GRPO trains on exactly that sampling
+distribution (`num_generations=4`, `temperature=0.7`). So the held-out eval
+below reports BOTH axes: greedy (comparable to round 1's number, expected to
+barely move since it's near ceiling) and sampled t=0.7 n=4/task (the axis the
+training signal actually operates on, with real headroom).
+
+## 3 seeds, byte-identical config (`training/configs/infra_synth_k8s_6gb.yaml`, only `--seed` differs)
+
+Command per seed: `PYTHONPATH=. .venv-train/bin/python -m training.run --config
+training/configs/infra_synth_k8s_6gb.yaml --seed {0,1,2} --output-dir
+results/infra_synth_k8s_pilot/seed{0,1,2}`, with
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set. `.venv-train`: Python
+3.13.13, `torch==2.13.0+cu130` (CUDA), `transformers==5.16.1`, `trl` +
+`peft==0.20.0`. GPU: RTX 3050 Laptop, 6144 MiB. 40 steps each: seed0 14m13s
+(21.3s/it), seed1 11m51s (17.8s/it), seed2 12m32s (18.8s/it).
+
+**TRAIN-split reward, seen by the trainer** (`metrics.ndjson`, temperature=0.7,
+sampled, num_generations=4), first-10 -> last-10 steps:
+
+| seed | first10 | last10 | delta | mean `frac_reward_zero_std` |
+|---|---|---|---|---|
+| 0 | 0.3125 | 0.5500 | +0.2375 | 0.200 |
+| 1 | 0.5125 | 0.8375 | +0.3250 | 0.313 |
+| 2 | 0.4125 | 0.5500 | +0.1375 | 0.163 |
+| **mean ± std** | | | **+0.233 ± 0.077** | |
+
+**All 3 seeds rose** (contrast with the gsm8k m1 run: seed 0 +0.025, seed 2
+−0.138 — mixed signs, no real trend). Groups stayed mostly non-degenerate
+throughout (`frac_reward_zero_std` 0.16-0.31, well under the 0.75 the t=1.0
+variance check predicted for a bad temperature choice). This is the reward the
+TRAINER sees, on sampled TRAIN-split rollouts — a different claim from the
+held-out pass rates below.
+
+**Held-out pass rate, same 15 test tasks/harness as round 1**
+(`scripts/infra_synth_k8s_posttrain_eval.py`; `posttrain_eval.json` = greedy
+n=1, `sampled_eval.json` = t=0.7 n=4/task):
+
+| | greedy (n=1) | sampled t=0.7, pass@1 (mean/sample) | sampled t=0.7, pass@4 (any-of-4) |
+|---|---|---|---|
+| **baseline** (base model) | 14/15 = 93.3% | 43.3% | 100% |
+| seed 0 | 15/15 = 100% | 38.3% | 80.0% |
+| seed 1 | 15/15 = 100% | 60.0% | 100% |
+| seed 2 | 15/15 = 100% | 50.0% | 93.3% |
+| **mean ± std (3 seeds)** | **100% ± 0** | **49.4% ± 8.9pp** (Δ **+6.1pp**) | **91.1% ± 8.3pp** (Δ **−8.9pp**) |
+
+**Report this exactly as loudly as a positive, per instructions — it is not a
+clean win:**
+- **Greedy**: all 3 seeds reach 100% (from 93.3%) — small, consistent, but
+  it's a 1-of-15 ceiling flip per seed (see caveat above), not a strong signal
+  by itself.
+- **Sampled pass@1 (mean-per-sample, the closest held-out analogue of the
+  TRAIN reward the trainer optimizes)**: improved for 2 of 3 seeds (seed1
+  +16.7pp, seed2 +6.7pp) and **regressed** for 1 of 3 (seed0 −5.0pp). Mean
+  +6.1pp — real but small relative to the ±8.9pp spread across just 3 seeds.
+- **Sampled pass@4 (any-of-4, the metric closest to what the base-model
+  headroom table above measured)**: **got WORSE for 2 of 3 seeds** (seed0
+  80.0%, seed2 93.3%, both below baseline's 100%; only seed1 held at 100%).
+  Mean −8.9pp.
+- **Reading pass@1 up + pass@4 down together**: this is consistent with GRPO
+  narrowing the sampling distribution around its (now higher-reward-on-average)
+  mode — the policy gets *more consistent* per prompt, which raises the typical
+  single-sample success rate but removes some of the base model's "lucky diverse
+  attempt" escape hatches that let a mediocre-on-average prompt still succeed at
+  least once in 4 tries. That is a real and interesting mechanistic hypothesis,
+  not a confirmed one — 3 seeds x 15 tasks x 4 samples is not enough data to
+  separate it cleanly from noise (the pass@1 std across seeds, 8.9pp, is
+  comparable in size to the mean delta, 6.1pp).
+- **Bottom line**: the trainer's own reward rose consistently and substantially
+  (+0.233 ± 0.077, all 3 seeds positive) and greedy pass rate rose to ceiling
+  for all 3 seeds. The held-out SAMPLED pass rate — the axis with real headroom
+  and the axis closest to what GRPO actually optimizes — shows a small mean
+  improvement on pass@1 but a mean regression on pass@4, with high seed-to-seed
+  variance on both. This does **not** cleanly demonstrate "training generalizes
+  to held-out sampling," but it does not show pure reward-hacking either
+  (pass@1 improved on average, not just the trainer's own metric). The honest
+  characterization is: **real, reproduced training signal; inconclusive,
+  seed-variable effect on held-out generalization, tilted slightly positive
+  on the primary (pass@1) axis and negative on the secondary (pass@4) axis.**
+
+## The `save_model` bug is a bigger finding than the pilot itself
+
+`training.run.train()` never called `trainer.save_model()`. With the
+historical `save_steps=0` default, `GRPOConfig.save_strategy="no"` means every
+completed GRPO run in this project's history — gsm8k included — **discarded
+its own trained weights**. No post-training evaluation of ANY prior run was
+ever possible; every claim about training "working" could only ever be checked
+against the trainer's own logged reward, never against what the trained model
+actually does on held-out data. The first pilot run of this seed (before the
+fix existed) is a direct demonstration: it trained cleanly, its reward curve
+(0.3125 -> 0.5625) is real, and its weights are gone — unrecoverable,
+re-trained from scratch as seed0 above once the fix landed. Fixed now
+(`training/run.py`, unconditional `trainer.save_model(cfg.output_dir)`).
 
 ## What's NOT in this directory
 
