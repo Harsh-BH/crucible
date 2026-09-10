@@ -85,3 +85,17 @@ logs/
 # local GPU training venv (not committed)
 .venv-train/
 outputs/
+
+# ---- per-seed trainer artifacts under results/ ----
+# A seed dir tracks only its small result files (adapter_config.json, summary.json,
+# metrics.ndjson, posttrain_eval.json, sampled_eval*.json). Everything else the HF/TRL
+# trainer drops beside them is a reproducible artifact, not a result: the LoRA weights,
+# a full copy of the tokenizer, the pickled training args, the generated model card.
+# *.safetensors / *.parquet / *.jsonl are already ignored further up, which is also why
+# each seed's committed metrics file is named .ndjson rather than .jsonl.
+results/**/tokenizer.json
+results/**/tokenizer_config.json
+results/**/training_args.bin
+results/**/chat_template.jinja
+results/**/seed*/README.md
+results/**/completions/
