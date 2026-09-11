@@ -161,12 +161,12 @@ estimator** (`sampled_eval_n8.json` / `baseline_sampled_eval_n8.json`;
 i.i.d. samples at fixed temperature=0.7 — the estimator's assumption holds
 here, each `generate()` call is an independent draw with no shared state):
 
-| k | baseline | seed0 | seed1 | seed2 | mean ± std (3 seeds) | Δ vs baseline |
-|---|---|---|---|---|---|---|
-| 1 | 0.433 | 0.392 | 0.608 | 0.533 | 0.511 ± 0.090 | **+0.078** |
-| 2 | 0.671 | 0.629 | 0.855 | 0.776 | 0.753 ± 0.094 | **+0.082** |
-| 4 | 0.883 | 0.869 | 0.987 | 0.941 | 0.932 ± 0.049 | **+0.049** |
-| 8 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 ± 0.000 | 0.000 (ceiling) |
+| k | baseline | seed0 | seed1 | seed2 | seed3 | mean ± std (4 seeds) | Δ vs baseline |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.433 | 0.392 | 0.608 | 0.533 | 0.550 | 0.521 ± 0.092 | **+0.088** |
+| 2 | 0.671 | 0.629 | 0.855 | 0.776 | 0.814 | 0.769 ± 0.099 | **+0.097** |
+| 4 | 0.883 | 0.869 | 0.987 | 0.941 | 0.978 | 0.944 ± 0.054 | **+0.061** |
+| 8 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 ± 0.000 | 0.000 (ceiling) |
 
 Greedy: baseline 93.3% (14/15); all 3 seeds 100% (15/15) — one task flipped per
 seed (see above), report as that, not as "100% pass rate."
@@ -181,7 +181,27 @@ at k=1,2,4 and ties it at k=8 (both already at ceiling). This is a real,
 if seed-variable, effect — not the "GRPO traded diversity for consistency and
 net-lost" story the noisier n=4 read suggested. The 3-seed spread (std 4.9-9.4pp
 across k=1..4) is still large relative to the mean delta (4.9-8.2pp), which is
-exactly why seeds 3-4 were run next (below) rather than stopping here.
+exactly why seed 3 was run next (below) rather than stopping here.
+
+### seed 3 (added 2026-09-11)
+
+seed 3 had been trained back with the others but its post-training eval was never run,
+so it sat uncommitted and out of the table above. Run now with the same harness and the
+same 15 test tasks; its six result files are committed alongside seeds 0-2.
+
+It lands **above baseline at every k** (0.550 / 0.814 / 0.978 / 1.000) and above the
+old 3-seed mean at k=1, 2 and 4, which moves the corpus-mean delta up at every k:
+**+0.078 -> +0.088** at k=1, **+0.082 -> +0.097** at k=2, **+0.049 -> +0.061** at k=4.
+Greedy is 15/15, same as the other three. Its trainer-side reward is the highest of the
+four (0.750 mean vs seed2's 0.625).
+
+**It does not resolve the variance concern, which is why it was run.** The spread is
+essentially unchanged (k=1 std 0.090 -> 0.092, k=2 0.094 -> 0.099, k=4 0.049 -> 0.054),
+so the delta-to-spread ratio improves only from roughly 0.9 to roughly 1.0 -- the effect
+is still about the same size as the seed-to-seed spread. What changed is the sign
+consistency: **3 of 4 seeds now sit above baseline at every k**, with seed0 still the
+lone seed at or slightly below. A 4th seed narrows nothing on its own; it takes more
+seeds, and seed 4 was never trained.
 
 ## The `save_model` bug is a bigger finding than the pilot itself
 
